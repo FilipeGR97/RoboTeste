@@ -1,0 +1,10 @@
+{
+    "python.defaultInterpreterPath": "C:/Users/filip/OneDrive/Documentos/RoboTeste/venv/Scripts/python.exe",
+    "python.linting.pylintEnabled": true,
+    "python.linting.pylintPath": "C:/Users/filip/OneDrive/Documentos/RoboTeste/venv/Scripts/pylint.exe",
+    "python.linting.enabled": true,
+    "python.linting.pylintArgs": [
+        "--load-plugins",
+        "pylint_django"
+    ]
+}
