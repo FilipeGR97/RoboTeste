@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from time import sleep
 
 import requests
@@ -5,8 +8,20 @@ import undetected_chromedriver as uc
 from selenium import webdriver
 from selenium.webdriver.remote.webdriver import By
 
+
+# Função para ativar_ambiente_virtual
+def ativar_ambiente_virtual():
+    if sys.platform == 'win32':
+        subprocess.run(".\venv\Scripts\Activate", shell=True, check=True)
+    else:
+        subprocess.run("source venv/bin/activate", shell=True, check=True)
+
+# Função para desativar o ambiente virtual
+def desativar_ambiente_virtual():
+    subprocess.run("deactivate", shell=True, check=True)
+
 driver = uc.Chrome()
-driver.get('https://blaze-4.com/pt/games/double')  # api da blaze
+driver.get('https://blaze-5.com/pt/games/double')  # api da blaze
 sleep(5)
 
 # Mensagens Padrao
@@ -49,8 +64,8 @@ def retornar_ultimo():
 def enviar_mensagem(mensagem):
     bot_token = ''
     chat_id = '-1002130180350'
-    url_blaze = '🎰 [Blaze](https://blaze-4.com/pt/games/double)'
-    url = f'https://api.telegram.org/bot6735689675:AAE-U9zDRjovQABSAm95op0ZIB9KX90OOVw/sendMessage?chat_id=-1002130180350&text={mensagem}\nhttps://blaze-4.com/pt/games/double&parse_mode=Markdown'  # faz uma marcação no texto da mensagem para inserir o link url blaze
+    url_blaze = '🎰 [Blaze](https://blaze-5.com/pt/games/double)'
+    url = f'https://api.telegram.org/bot6735689675:AAE-U9zDRjovQABSAm95op0ZIB9KX90OOVw/sendMessage?chat_id=-1002130180350&text={mensagem}\nhttps://blaze-5.com/pt/games/double&parse_mode=Markdown'  # faz uma marcação no texto da mensagem para inserir o link url blaze
     requests.get(url)
 
 # Cores e símbolos blaze double
@@ -108,6 +123,6 @@ while True:
                     break
     except Exception as e:
         print(e)
-        driver.get('https://blaze-4.com/pt/games/double')
+        driver.get('https://blaze-5.com/pt/games/double')
         sleep(10)
         pass
