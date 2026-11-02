@@ -1,20 +1,21 @@
 // A Frota da Diáspora (naves com IA própria que fugiram junto) e as Sombras (as naves que saíram do Érebo).
 // Tudo aqui é determinístico a partir da galáxia e do estado salvo (S.flags, S.stats.time).
 import * as THREE from 'three';
-import { SHIPS, buildShip } from './ships.js';
+import { SHIPS, buildShip, ESPERANCA_DEF, probeShape } from './ships.js';
 import { getSystem, bodyPosition, hzRange } from './system.js';
 import { KM_PER_AU, fmtNum } from './util.js';
 
+// model: casco-base; scale: ampliação (as naves da frota têm tamanhos próprios, de 15 m a 2 km)
 export const FLEET = {
-  esperanca: { nome: 'Esperança', ia: 'ATLAS', model: 'odisseia', cor: '#ffd27a', desc: 'Nave-comando da frota. A IA ATLAS coordena a fuga.' },
-  iara: { nome: 'Iara', ia: 'MAÍRA', model: 'andorinha', cor: '#7affc8', desc: 'Cápsula com quatro pessoas a bordo.' },
-  tupa: { nome: 'Tupã', ia: 'ARANDU', model: 'leviata', cor: '#ff9a7a', desc: 'Cargueiro pesado com as sementes e os arquivos genéticos da Terra.' },
-  aurora: { nome: 'Aurora', ia: 'GAIA', model: 'exodo', cor: '#9ad0ff', desc: 'Arca com quarenta mil pessoas em sono criogênico.' },
-  valquiria: { nome: 'Valquíria', ia: 'HELA', model: 'odisseia', cor: '#ff7a9a', desc: 'Fragata militar.' },
+  esperanca: { nome: 'Esperança', ia: 'ATLAS', model: 'esperanca', scale: 1, reg: 'ESPERANÇA', cor: '#ffd27a', desc: 'Nave-comando da frota. A IA ATLAS coordena a fuga.' },
+  iara: { nome: 'Iara', ia: 'MAÍRA', model: 'andorinha', scale: 1, reg: 'IARA-04', cor: '#7affc8', desc: 'Cápsula com quatro pessoas a bordo.' },
+  tupa: { nome: 'Tupã', ia: 'ARANDU', model: 'leviata', scale: 1.6, reg: 'TUPÃ', cor: '#ff9a7a', desc: 'Cargueiro pesado com as sementes e os arquivos genéticos da Terra.' },
+  aurora: { nome: 'Aurora', ia: 'GAIA', model: 'exodo', scale: 2.3, reg: 'AURORA', cor: '#9ad0ff', desc: 'Arca com quarenta mil pessoas em sono criogênico.' },
+  valquiria: { nome: 'Valquíria', ia: 'HELA', model: 'odisseia', scale: 2, reg: 'VALQUÍRIA', cor: '#ff7a9a', desc: 'Fragata militar.' },
 };
 export const SPEAKER_COLOR = { LUMEN: '#7fe0ff', ATLAS: '#ffd27a', 'MAÍRA': '#7affc8', ARANDU: '#ff9a7a', GAIA: '#9ad0ff', HELA: '#ff7a9a', '???': '#c49bff', 'REGISTRO': '#d8d8d8' };
 
-const shipDef = (id) => SHIPS.find((s) => s.id === id);
+const shipDef = (id) => (id === 'esperanca' ? ESPERANCA_DEF : SHIPS.find((s) => s.id === id));
 
 let GLOW_TEX = null;
 function glowSprite(color, size = 0.05) {
@@ -120,6 +121,8 @@ export function makeShadowModel() {
   return g;
 }
 
+const _qi = new THREE.Quaternion(), _lp = new THREE.Vector3();
+
 // ------------------------------------------------------------------------------------------------
 // Objetos da frota (e Sombras passivas) dentro do sistema carregado
 // ------------------------------------------------------------------------------------------------
@@ -147,7 +150,7 @@ export class FleetView {
 
   add(id, state, anchor, k) {
     const def = FLEET[id];
-    const model = buildShip(shipDef(def.model));
+    const model = buildShip({ ...shipDef(def.model), reg: def.reg }, def.scale);
     const group = model.group;
     if (state === 'destroco') {
       // casco morto: sem luzes nem motores, girando devagar
@@ -166,7 +169,7 @@ export class FleetView {
     const R = anchor ? anchor.radius : 0;
     const off = new THREE.Vector3(Math.cos(k * 2.1 + 0.6), 0.25 * Math.sin(k * 1.7), Math.sin(k * 2.1 + 0.6));
     off.setLength(anchor ? R * 4 + 600 + k * 120 : 0.4 * KM_PER_AU);
-    this.objs.push({ id, def, state, model, group, glow, anchor, off, pos: [0, 0, 0], world: new THREE.Vector3(), name: def.nome, radius: model.length, spin: Math.random() * 6 });
+    this.objs.push({ id, def, state, model, group, glow, anchor, off, pos: [0, 0, 0], world: new THREE.Vector3(), name: def.nome, radius: model.length, spin: Math.random() * 6, shape: model.shape, unit: model.unit, gap: Infinity, layer1: false });
   }
 
   addShadow(planet, k) {
@@ -174,6 +177,15 @@ export class FleetView {
     this.scene.add(group);
     const a = (k / 3) * Math.PI * 2;
     this.objs.push({ id: 'sombra' + k, shadow: true, group, anchor: planet, orbitA: a, orbitR: planet.radius * 2.6, pos: [0, 0, 0], world: new THREE.Vector3(), name: 'Sombra', radius: 0.18 });
+  }
+
+  // posições no instante t (chamado antes da colisão: os planetas andam dezenas de km/s)
+  place(t) {
+    for (const o of this.objs) {
+      if (o.shadow) continue;
+      const ap = o.anchor ? bodyPosition(o.anchor, t, [0, 0, 0]) : [0, 0, 0];
+      o.pos = [ap[0] + o.off.x, ap[1] + o.off.y, ap[2] + o.off.z];
+    }
   }
 
   update(dt, t, shipLocal, elapsed) {
@@ -198,16 +210,37 @@ export class FleetView {
           o.group.add(o.beacon);
         }
         if (o.beacon) o.beacon.visible = (elapsed % 1.2) < 0.35;
+        // de perto, a nave da frota também é desenhada na camada da nave do jogador,
+        // para que uma possa encobrir a outra (a camada da nave limpa o depth buffer)
+        const close = o.world.length() < Math.max(60, o.radius * 40);
+        if (close !== o.layer1) {
+          o.layer1 = close;
+          o.group.traverse((m) => {
+            if (!m.isMesh || m.material.isShaderMaterial || m.material.transparent) return;
+            if (close) m.layers.enable(1); else m.layers.disable(1);
+          });
+        }
       }
       if (o.glow) {
         o.glow.position.copy(o.world);
-        const near = o.world.length() < 2; // perto, a nave já é visível por si
+        const near = o.world.length() < Math.max(2, o.radius * 4); // perto, a nave já é visível por si
         o.glow.visible = !near && (o.state !== 'socorro' || (elapsed % 1.2) < 0.6);
       }
     }
   }
 
   find(id) { return this.objs.find((o) => o.id === id) || null; }
+
+  // Distância (km, com sinal) entre uma esfera e o casco de o; rel = centro da esfera − posição da nave (km).
+  // outN recebe a normal de saída no referencial da cena.
+  probe(o, rel, rKm, outN) {
+    if (!o.shape) { const d = rel.length(); outN.copy(rel).divideScalar(d || 1); return d - o.radius - rKm; }
+    _qi.copy(o.group.quaternion).invert();
+    _lp.copy(rel).applyQuaternion(_qi).divideScalar(o.unit);
+    const gap = probeShape(o.shape, _lp, rKm / o.unit, outN) * o.unit;
+    outN.applyQuaternion(o.group.quaternion);
+    return gap;
+  }
 
   dispose() {
     for (const o of this.objs) { this.scene.remove(o.group); if (o.glow) this.scene.remove(o.glow); }

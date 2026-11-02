@@ -347,6 +347,13 @@ export class AudioEngine {
     const g = ctx.createGain(); g.gain.setValueAtTime(0.35 * strength, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.7);
     n.connect(lp).connect(g).connect(this.sfxBus); n.start(t); n.stop(t + 0.8);
   }
+  // batida de casco contra casco: baque grave + ressonância metálica (parciais inarmônicas)
+  clang(strength = 1) {
+    if (!this.ctx) return;
+    this.thud(Math.min(strength, 1));
+    const f0 = 140 + Math.random() * 60;
+    for (const [k, v] of [[1, 0.05], [2.76, 0.03], [5.4, 0.018], [8.9, 0.01]]) this.tone(f0 * k, 0.5 + strength * 0.9, v * strength, 'sine', 0, true, f0 * k * 0.97);
+  }
   // canto de pássaro (Nova Terra)
   chirp() {
     if (!this.ctx) return;

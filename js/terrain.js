@@ -447,10 +447,16 @@ void main(){
 const CLOUD_FRAG = /* glsl */ `
 #include <logdepthbuf_pars_fragment>
 uniform vec3 uSunPos, uSunCol, cCloud, uStormDir;
-uniform float uSunI, uClouds, uCloudRot, uSeed, uStorm, uOct, uInside;
-varying vec3 vObj; varying vec3 vWorld; varying vec3 vNw;
+uniform float uSunI, uClouds, uCloudRot, uSeed, uStorm, uOct, uInside, uRw;
+varying vec3 vObj; varying vec3 vWorld; varying vec3 vNw; varying vec3 vCenter;
 ${NOISE}
 void main(){
+  // o depth logarítmico escreve gl_FragDepth e desliga o teste de profundidade antecipado:
+  // sem este corte, os pixels de nuvem escondidos atrás do planeta calculariam todo o ruído
+  vec3 ro = cameraPosition - vCenter, rd = vWorld - cameraPosition;
+  float segL = length(rd); rd /= segL;
+  float hb = dot(ro, rd), hh = hb * hb - dot(ro, ro) + uRw * uRw;
+  if (hh > 0.0) { float t = -hb - sqrt(hh); if (t > 0.0 && t < segL) discard; }
   vec3 n = normalize(vObj);
   float cr = uCloudRot;
   vec3 cn0 = vec3(n.x * cos(cr) - n.z * sin(cr), n.y, n.x * sin(cr) + n.z * cos(cr));
@@ -578,8 +584,9 @@ export class PlanetSurface {
         vertexShader: `
           #include <common>
           #include <logdepthbuf_pars_vertex>
-          varying vec3 vObj; varying vec3 vWorld; varying vec3 vNw;
+          varying vec3 vObj; varying vec3 vWorld; varying vec3 vNw; varying vec3 vCenter;
           void main(){ vObj = position; vec4 w = modelMatrix * vec4(position, 1.0); vWorld = w.xyz; vNw = normalize(mat3(modelMatrix) * normal);
+            vCenter = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
             gl_Position = projectionMatrix * viewMatrix * w;
             #include <logdepthbuf_vertex>
           }`,
@@ -587,7 +594,7 @@ export class PlanetSurface {
         uniforms: {
           uSunPos: { value: new THREE.Vector3() }, uSunCol: { value: new THREE.Color(1, 1, 1) }, uSunI: { value: 1 }, cCloud: { value: col(v.cloudColor) },
           uStormDir: { value: new THREE.Vector3(...(v.stormDir || [0, 1, 0])) }, uClouds: { value: v.clouds }, uCloudRot: { value: 0 }, uSeed: { value: v.seed },
-          uStorm: { value: v.storm || 0 }, uOct: { value: 7 }, uInside: { value: 0 },
+          uStorm: { value: v.storm || 0 }, uOct: { value: 7 }, uInside: { value: 0 }, uRw: { value: this.R * 0.9995 },
         },
         transparent: true, depthWrite: false, side: THREE.DoubleSide,
       });

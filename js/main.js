@@ -13,7 +13,7 @@ import { Sky } from './sky.js';
 import { SHIPS, buildShip, setShipScale } from './ships.js';
 import { AudioEngine } from './audio.js';
 import { GalaxyMap } from './map.js';
-import { CinematicShader, tunnelMaterial, streakMaterial, LensShader, dustMaterial } from './shaders.js';
+import { CinematicShader, SanitizeShader, tunnelMaterial, streakMaterial, LensShader, dustMaterial } from './shaders.js';
 import { UI, $, remarkFor } from './ui.js';
 import { missionStatus } from './missions.js';
 import { Fleet, FleetView, ShadowEncounter, exoCatalog, FLEET } from './fleet.js';
@@ -30,7 +30,7 @@ const T0 = 1.7e9;
 // Configurações
 // ------------------------------------------------------------------------------------------------
 const settings = Object.assign(
-  { music: 0.7, sfx: 0.8, amb: 0.6, fov: 62, quality: 0.85, exposure: 1.0, invert: false, tick: false },
+  { music: 0.7, sfx: 0.8, amb: 0.6, fov: 62, quality: 0.85, exposure: 1.0, invert: false, tick: false, steer: 1, look: 1, fps: false },
   JSON.parse(localStorage.getItem(SET_KEY) || '{}'),
 );
 const saveSettings = () => localStorage.setItem(SET_KEY, JSON.stringify(settings));
@@ -73,7 +73,7 @@ const S = {
   state: 'loading',
   shipDef: SHIPS[0], ship: null,
   anchor: 0, local: [0, 0, 0], quat: new THREE.Quaternion(),
-  throttle: 0, speed: 0, angVel: new THREE.Vector3(),
+  throttle: 0, speed: 0, angVel: new THREE.Vector3(), knock: new THREE.Vector3(), bumpShake: 0,
   sysIndex: -1, view: null,
   target: null, autopilot: false, align: false, lastStep: 0,
   frame: null, surf: null, si: null, env: null, hull: 100, dmgT: 10, landed: null, autoland: false, vdesc: 0,
@@ -120,7 +120,7 @@ async function init() {
   if (localStorage.getItem(SAVE_KEY)) $('btn-continue').classList.remove('hidden');
   $('loading').classList.add('hidden');
   S.state = 'title';
-  window.__UH = { S, sky, scene, camera, galaxy, map, renderer, bloom, cine, audio, fleet, spawnShadow: () => spawnShadow() };
+  window.__UH = { S, sky, scene, camera, galaxy, map, renderer, composer, bloom, cine, audio, fleet, spawnShadow: () => spawnShadow() };
   requestAnimationFrame(loop);
 }
 
@@ -145,6 +145,7 @@ function setupComposer() {
   composer.addPass(mainPass);
   composer.addPass(lens);
   composer.addPass(shipPass);
+  composer.addPass(new ShaderPass(SanitizeShader));
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
   composer.addPass(cine);
@@ -290,6 +291,9 @@ function loadSystem(i, announce = true) {
   unloadSystem();
   const sys = getSystem(galaxy, i);
   S.view = new SystemView(sys, scene);
+  // posiciona os astros já agora: até o primeiro update, todos estão em (0,0,0) — em cima da nave —
+  // e a checagem de perigo do mesmo quadro "via" a nave dentro do horizonte de um buraco negro
+  S.view.update(S.t, S.local, camera, H);
   S.fv = new FleetView(scene, S.view, fleet, S);
   S.view.showOrbits = S.showOrbits;
   for (const b of sys.bodies) if (S.scanned[b.id]) b.scannedScore = S.scanned[b.id].score;
@@ -445,11 +449,68 @@ function environment() {
 }
 
 function shipHalf() { return S.ship.length * 0.12; }
-function nearestFleet() {
-  if (!S.fv) return null;
-  let best = null;
-  for (const o of S.fv.objs) { const d = o.world.length() - o.radius; if (!best || d < best.d) best = { o, d }; }
-  return best;
+// Folga (km) entre o casco da nave e o de cada objeto da frota; calculada uma vez por quadro
+const _rel = new THREE.Vector3(), _sc = new THREE.Vector3(), _n = new THREE.Vector3(), _n2 = new THREE.Vector3();
+const FOOT_SPHERE = [{ c: new THREE.Vector3(), r: 0.001 }];
+let fleetNear = null;
+function fleetGap(o, out) {
+  const base = _rel.set(S.local[0] - o.pos[0], S.local[1] - o.pos[1], S.local[2] - o.pos[2]);
+  let gap = Infinity;
+  const sph = S.mode === 'ship' && S.ship ? S.ship.spheres : FOOT_SPHERE;
+  for (const sp of sph) {
+    const c = _sc.copy(sp.c).applyQuaternion(S.quat).add(base);
+    const g = S.fv.probe(o, c, sp.r, _n2);
+    if (g < gap) { gap = g; if (out) out.copy(_n2); }
+  }
+  return gap;
+}
+function updateFleetProx() {
+  fleetNear = null;
+  if (!S.fv) return;
+  S.fv.place(S.t);
+  for (const o of S.fv.objs) {
+    o.gap = fleetGap(o, _n);
+    if (!fleetNear || o.gap < fleetNear.d) fleetNear = { o, d: o.gap, n: _n.clone() };
+  }
+}
+function nearestFleet() { return fleetNear; }
+
+// Batida contra uma nave da frota: empurra para fora, quica e causa dano conforme a velocidade de impacto
+let bumpCd = 0;
+function fleetContact(dt) {
+  bumpCd -= dt;
+  if (!S.fv || S.mode !== 'ship' || S.landed || !S.ship) return;
+  for (const o of S.fv.objs) {
+    if (!o.shape || o.gap > S.ship.length + 0.5) continue;
+    const gap = fleetGap(o, _n);
+    if (gap >= 0) continue;
+    S.local[0] -= _n.x * gap; S.local[1] -= _n.y * gap; S.local[2] -= _n.z * gap;
+    const fwd = _v.set(0, 0, -1).applyQuaternion(S.quat);
+    const head = -fwd.dot(_n); // 1 = de frente contra o casco
+    const vn = fwd.multiplyScalar(S.speed).add(S.knock).dot(_n);
+    if (vn >= 0) continue;
+    S.knock.addScaledVector(_n, -vn * 1.35);
+    S.speed *= 1 - clamp(head, 0, 1) * 0.85;
+    S.autopilot = false;
+    bump(-vn * 1000, o);
+  }
+}
+function bump(ms, o) {
+  S.bumpShake = Math.max(S.bumpShake, clamp(ms / 25, 0.15, 1));
+  const j = clamp(ms / 40, 0.05, 0.6);
+  S.angVel.x += (Math.random() - 0.5) * j; S.angVel.y += (Math.random() - 0.5) * j; S.angVel.z += (Math.random() - 0.5) * j * 2;
+  if (bumpCd > 0 && ms < 4) return;
+  bumpCd = 0.35;
+  audio.clang(clamp(ms / 20, 0.2, 1.2));
+  if (ms > 150) {
+    destroyShip(`Batemos na ${o.name} a ${fmtNum(ms, 0)} m/s. Nenhum casco aguenta isso.`);
+  } else if (ms > 4) {
+    S.lastCause = `A colisão com a ${o.name} rompeu o casco.`;
+    damage((ms - 4) * 0.7);
+    cine.uniforms.uFlashC.value.set(1, 0.35, 0.2);
+    cine.uniforms.uFlash.value = Math.max(cine.uniforms.uFlash.value, clamp(ms / 120, 0.08, 0.4));
+    UI.msg(`Colisão com a ${o.name} a ${fmtNum(ms, 0)} m/s · casco ${fmtNum(S.hull, 0)}%`, 'warn', 'NAV');
+  } else UI.msg(`Encostamos na ${o.name}.`, '', 'NAV');
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -602,7 +663,7 @@ function placeAtEarth() {
 
 function nearestSurface() {
   const nf = nearestFleet();
-  if (nf && nf.d < 2000 && !S.si) return { dist: Math.max(nf.d - 0.1, 0.02), item: null };
+  if (nf && nf.d < 2000 && !S.si) return { dist: Math.max(nf.d, 0.002), item: null };
   if (S.si) return { dist: Math.max(S.si.alt - (S.mode === 'ship' && S.ship ? shipHalf() : 0), 0), item: S.si.it };
   if (S.view) {
     let best = Infinity, item = null;
@@ -696,7 +757,7 @@ function targetInfo() {
     const o = fleetObj(S.target.id);
     if (!o) { S.target = null; return null; }
     return {
-      name: o.name, world: o.world.clone(), dist: Math.max(o.world.length() - o.radius, 0), fleet: o,
+      name: o.name, world: o.world.clone(), dist: Math.max(o.gap, 0), fleet: o,
       type: o.shadow ? 'Desconhecido · origem: Érebo' : `Frota da Diáspora · IA ${o.def.ia}${o.state === 'socorro' ? ' · SOCORRO' : o.state === 'destroco' ? ' · destroços' : ''}`,
     };
   }
@@ -736,7 +797,7 @@ function flight(dt) {
   const def = S.shipDef;
   if (S.landed) {
     // pousado: [W] / propulsão decola
-    S.speed = 0; S.angVel.set(0, 0, 0);
+    S.speed = 0; S.angVel.set(0, 0, 0); S.knock.set(0, 0, 0);
     if (keys.KeyW || S.throttle > 0.05) takeoff();
     return;
   }
@@ -748,7 +809,7 @@ function flight(dt) {
     let sx = (mouse.x - W / 2) / r, sy = (mouse.y - H / 2) / r;
     const m = Math.hypot(sx, sy);
     if (m > 0.035) {
-      const k = Math.min(1, (m - 0.035) / 0.6) / m;
+      const k = Math.min(1, ((m - 0.035) / 0.6) * settings.steer) / m;
       yaw -= sx * k; pitch -= sy * k * inv;
       manual = true;
     }
@@ -774,7 +835,7 @@ function flight(dt) {
       const s = steerToward(ti.world);
       yaw = s.yaw; pitch = s.pitch;
       S.throttle = s.align > 0.995 ? 1 : s.align > 0.95 ? 0.35 : 0;
-      if (ti.dist < Math.max(0.25, ti.fleet.radius * 4)) { S.autopilot = false; S.throttle = 0; S.speed = 0; UI.msg(`Chegamos à ${ti.name}.`); audio.message(); }
+      if (ti.dist < Math.max(0.15, ti.fleet.radius * 0.5)) { S.autopilot = false; S.throttle = 0; S.speed = 0; UI.msg(`Chegamos à ${ti.name}.`); audio.message(); }
     } else if (!ti || !ti.it) { S.autopilot = false; }
     else {
       const s = steerToward(ti.world);
@@ -815,6 +876,9 @@ function flight(dt) {
   let autoMax = clamp(near.dist * 0.75, near.dist < 3 ? 0.0015 : 0.02, def.maxC * C_KMS);
   // numa atmosfera o limitador respeita a densidade do ar (acima disso só com [Shift], e o casco esquenta)
   if (S.env && S.env.rho > 1e-6) autoMax = Math.min(autoMax, Math.max(0.3 / Math.sqrt(S.env.rho), S.si && S.si.b.body === 'gas' ? 0.6 : 0.05));
+  // perto de uma nave da frota: aproximação lenta (30% da folga por segundo, mínimo 2 m/s), só indo na direção dela
+  const nf = nearestFleet();
+  if (nf && nf.d < 5 && !nf.o.shadow && nf.n.dot(_v.set(0, 0, -1).applyQuaternion(S.quat)) < 0.15) autoMax = Math.min(autoMax, Math.max(nf.d * 0.3, 0.002));
   const boost = keys.ShiftLeft || keys.ShiftRight ? 4 : 1;
   // [Shift] perto da superfície = forçar: o freio automático deixa de agir e a nave mantém a inércia
   const forcing = boost > 1 && S.si && S.si.alt < 60;
@@ -829,6 +893,10 @@ function flight(dt) {
   S.lastStep = step;
   S.local[0] += fwd.x * step; S.local[1] += fwd.y * step; S.local[2] += fwd.z * step;
   S.stats.ly += step / KM_PER_LY;
+  if (S.knock.lengthSq() > 1e-14) {
+    S.local[0] += S.knock.x * dt; S.local[1] += S.knock.y * dt; S.local[2] += S.knock.z * dt;
+    S.knock.multiplyScalar(Math.exp(-dt * 0.8));
+  }
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1283,7 +1351,7 @@ function updateWarp(dt) {
 function arrive() {
   const w = S.warp;
   const i = w.target;
-  S.speed = 0; S.throttle = 0;
+  S.speed = 0; S.throttle = 0; S.knock.set(0, 0, 0);
   S.stats.jumps++;
   S.warp = null;
   warpFx.level = 0;
@@ -1438,11 +1506,24 @@ function updateCamera(dt) {
     const gmin = b.radius + (h.water ? 0 : h.e) + 0.0015;
     if (r < gmin) camera.position.addScaledVector(d.applyQuaternion(q), gmin - r);
   }
-  let shake = 0;
-  if (S.warp) shake = S.warp.phase === 'charge' ? (S.warp.t / S.warp.dur) * 0.5 : 0.25 * warpFx.level;
+  if (!cockpit) cameraOutsideFleet();
+  let shake = S.bumpShake;
+  S.bumpShake *= Math.exp(-dt * 4);
+  if (S.warp) shake = Math.max(shake, S.warp.phase === 'charge' ? (S.warp.t / S.warp.dur) * 0.5 : 0.25 * warpFx.level);
   if (shake > 0) camera.position.add(_v.set((Math.random() - 0.5), (Math.random() - 0.5), (Math.random() - 0.5)).multiplyScalar(L * 0.02 * shake));
   const fov = settings.fov + warpFx.level * 32 + (S.warp && S.warp.phase === 'charge' ? -4 * (S.warp.t / S.warp.dur) : 0);
   if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }
+}
+
+// a câmera externa recua em direção à nave se ficaria dentro do casco de outra nave
+function cameraOutsideFleet() {
+  if (!S.fv || !fleetNear || fleetNear.d > S.ship.length * 3) return;
+  const o = fleetNear.o;
+  const at = (k) => S.fv.probe(o, _sc.copy(camera.position).multiplyScalar(k).add(_rel.set(S.local[0] - o.pos[0], S.local[1] - o.pos[1], S.local[2] - o.pos[2])), 0.002, _n2);
+  if (at(1) > 0) return;
+  let lo = 0, hi = 1;
+  for (let k = 0; k < 7; k++) { const m = (lo + hi) / 2; if (at(m) > 0) lo = m; else hi = m; }
+  camera.position.multiplyScalar(lo);
 }
 
 function syncShipCam() {
@@ -1620,7 +1701,7 @@ function updateHUD(dt) {
       const pr = project(o.world);
       if (!pr.on) continue;
       const isT = S.target && S.target.kind === 'fleet' && S.target.id === o.id;
-      entries.push({ key: 'fleet:' + o.id, x: pr.x, y: pr.y, text: o.shadow ? 'Sombra' : o.name + (o.state === 'socorro' ? ' · SOCORRO' : o.state === 'destroco' ? ' · destroços' : ''), sub: fmtDist(o.world.length()), cls: isT ? 'tgt' : o.shadow ? 'shadow' : 'fleet', color: o.shadow ? '#c49bff' : FLEET[o.id] ? FLEET[o.id].cor : '#ffd27a' });
+      entries.push({ key: 'fleet:' + o.id, x: pr.x, y: pr.y, text: o.shadow ? 'Sombra' : o.name + (o.state === 'socorro' ? ' · SOCORRO' : o.state === 'destroco' ? ' · destroços' : ''), sub: o.model ? `${fmtNum(o.model.meters, 0)} m · ${fmtDist(Math.max(o.gap, 0))}` : fmtDist(o.world.length()), cls: isT ? 'tgt' : o.shadow ? 'shadow' : 'fleet', color: o.shadow ? '#c49bff' : FLEET[o.id] ? FLEET[o.id].cor : '#ffd27a' });
     }
   }
   if (S.shadow) {
@@ -1628,8 +1709,27 @@ function updateHUD(dt) {
     if (pr.on) entries.push({ key: 'shadow', x: pr.x, y: pr.y, text: 'SOMBRA', sub: fmtDist(S.shadow.rel.length()), cls: 'shadow', color: '#c49bff' });
   }
   UI.labels(entries);
+  updateApproach(dt);
   updateMission(dt);
   updatePrompts(dt);
+}
+
+// Painel de aproximação: folga até o casco e velocidade de aproximação da nave da frota mais próxima
+let apPrev = null, apClose = 0;
+function updateApproach(dt) {
+  const nf = fleetNear;
+  const show = !!(nf && nf.o.model && nf.d < 5 && S.mode === 'ship' && !S.landed && !S.warp);
+  $('approach').classList.toggle('hidden', !show);
+  if (!show) { apPrev = null; return; }
+  if (apPrev && apPrev.o === nf.o && dt > 0) apClose += ((apPrev.d - nf.d) / dt - apClose) * (1 - Math.exp(-dt * 4));
+  else apClose = 0;
+  apPrev = { o: nf.o, d: nf.d };
+  const ms = apClose * 1000, gapM = Math.max(0, nf.d * 1000);
+  const lvl = ms > 20 && gapM < 400 ? 'danger' : ms > 5 && gapM < 150 ? 'warn' : 'ok';
+  $('approach').className = 'ap-' + lvl;
+  UI.setText('ap-name', `${nf.o.name.toUpperCase()} · ${fmtNum(nf.o.model.meters, 0)} m`);
+  UI.setText('ap-gap', gapM < 1000 ? `${fmtNum(gapM, 0)} m` : `${fmtNum(gapM / 1000, 2)} km`);
+  UI.setText('ap-vel', `${ms >= 0 ? 'aproximando' : 'afastando'} ${fmtNum(Math.abs(ms), Math.abs(ms) < 10 ? 1 : 0)} m/s`);
 }
 
 function labelColor(b) {
@@ -1911,7 +2011,7 @@ async function startGame(def, fromSave = false) {
   cine.uniforms.uFog.value = 0; cine.uniforms.uHeat.value = 0; cine.uniforms.uFlashC.value.set(0.8, 0.9, 1.0);
   S.ship.group.visible = true;
   $('destroyed').classList.add('hidden');
-  S.target = null; S.autopilot = false; S.align = false; S.speed = 0; S.throttle = 0; S.warp = null; S.scan = null;
+  S.target = null; S.autopilot = false; S.align = false; S.speed = 0; S.throttle = 0; S.warp = null; S.scan = null; S.knock.set(0, 0, 0);
   if (!fromSave) S.target = { kind: 'body', id: '0:Terra' };
   mission = null;
   S.cam.mode = 'chase'; S.cam.yaw = 0; S.cam.pitch = 0; S.cam.zoom = fromSave ? 1 : 5; S.cam.intro = !fromSave;
@@ -1953,14 +2053,26 @@ async function toMenu() {
   fade(false);
 }
 
+function fillOptions() {
+  $('vol-music').value = settings.music; $('vol-sfx').value = settings.sfx; $('vol-amb').value = settings.amb;
+  $('opt-fov').value = settings.fov; $('opt-quality').value = String(settings.quality);
+  $('opt-exposure').value = settings.exposure; $('opt-invert').checked = settings.invert; $('opt-tick').checked = settings.tick;
+  $('opt-steer').value = settings.steer; $('opt-look').value = settings.look; $('opt-fps').checked = settings.fps;
+}
+function titleOptions(on) {
+  $('pause').classList.toggle('hidden', !on);
+  $('pause').classList.toggle('from-title', on);
+  $('btn-opt-back').classList.toggle('hidden', !on);
+  $('pause-title').textContent = on ? 'AJUSTES' : 'PAUSA';
+  $('title').classList.toggle('behind', on);
+  if (on) fillOptions(); else saveSettings();
+}
 function pause(on) {
   if (on) {
     S.prevState = S.state;
     S.state = 'pause';
     $('pause').classList.remove('hidden');
-    $('vol-music').value = settings.music; $('vol-sfx').value = settings.sfx; $('vol-amb').value = settings.amb;
-    $('opt-fov').value = settings.fov; $('opt-quality').value = String(settings.quality);
-    $('opt-exposure').value = settings.exposure; $('opt-invert').checked = settings.invert; $('opt-tick').checked = settings.tick;
+    fillOptions();
   } else {
     S.state = S.prevState || 'play';
     $('pause').classList.add('hidden');
@@ -1979,6 +2091,8 @@ function bindUI() {
   $('sel-next').onclick = () => { showPreviewShip(preview.idx + 1); audio.click(); };
   $('sel-go').onclick = () => { audio.click(); startGame(SHIPS[preview.idx]); };
   $('btn-resume').onclick = () => pause(false);
+  $('btn-options').onclick = () => { audio.init(); audio.click(); titleOptions(true); };
+  $('btn-opt-back').onclick = () => { audio.click(); titleOptions(false); };
   $('d-retry').onclick = () => { audio.duck(false); $('destroyed').classList.add('hidden'); if (loadGame()) startGame(S.shipDef, true); else toMenu(); };
   $('d-menu').onclick = () => { audio.duck(false); toMenu(); };
   $('btn-menu').onclick = () => { pause(false); toMenu(); };
@@ -1991,6 +2105,10 @@ function bindUI() {
   $('opt-quality').onchange = (e) => { settings.quality = +e.target.value; onResize(); };
   $('opt-invert').onchange = (e) => { settings.invert = e.target.checked; };
   $('opt-tick').onchange = (e) => { settings.tick = e.target.checked; audio.ticking = settings.tick; };
+  $('opt-steer').oninput = (e) => { settings.steer = +e.target.value; };
+  $('opt-look').oninput = (e) => { settings.look = +e.target.value; };
+  $('opt-fps').onchange = (e) => { settings.fps = e.target.checked; $('fps').classList.toggle('hidden', !settings.fps); };
+  $('fps').classList.toggle('hidden', !settings.fps);
   $('music-file-btn').onclick = () => $('music-file').click();
   $('music-file').onchange = async (e) => {
     const f = e.target.files[0];
@@ -2044,11 +2162,13 @@ function bindUI() {
     mouse.x = e.clientX; mouse.y = e.clientY;
     if (S.mode === 'foot' && S.walker && S.state === 'play' && document.pointerLockElement === canvas) {
       const inv = settings.invert ? -1 : 1;
-      S.walker.yaw += e.movementX * 0.0024;
-      S.walker.pitch = clamp(S.walker.pitch - e.movementY * 0.0024 * inv, -1.45, 1.45);
+      const k = 0.0024 * settings.look;
+      S.walker.yaw += e.movementX * k;
+      S.walker.pitch = clamp(S.walker.pitch - e.movementY * k * inv, -1.45, 1.45);
     } else if (mouse.look && S.state === 'play') {
-      S.cam.yaw -= (e.clientX - mouse.lastX) * 0.005;
-      S.cam.pitch = clamp(S.cam.pitch - (e.clientY - mouse.lastY) * 0.005, -1.4, 1.4);
+      const k = 0.005 * settings.look;
+      S.cam.yaw -= (e.clientX - mouse.lastX) * k;
+      S.cam.pitch = clamp(S.cam.pitch - (e.clientY - mouse.lastY) * k, -1.4, 1.4);
     }
     mouse.lastX = e.clientX; mouse.lastY = e.clientY;
   });
@@ -2152,6 +2272,7 @@ function onResize() {
 // Loop principal
 // ------------------------------------------------------------------------------------------------
 let last = performance.now(), saveTimer = 0, titleAng = 0, elapsed = 0, storyT = 0;
+let fpsN = 0, fpsT = 0, fpsLast = 0;
 
 // epílogo: depois de pisar na Nova Terra, as Sombras falam
 function epilogueTick() {
@@ -2180,6 +2301,10 @@ function loop(now) {
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
   elapsed += dt;
+  if (settings.fps) {
+    fpsN++; fpsT += now - (fpsLast || now); fpsLast = now;
+    if (fpsT > 500) { $('fps').textContent = `${Math.round((fpsN * 1000) / fpsT)} FPS`; fpsN = 0; fpsT = 0; }
+  }
   cine.uniforms.uTime.value = elapsed;
   cine.uniforms.uRes.value.set(W, H);
   cine.uniforms.uFlash.value *= Math.exp(-dt * 2.5);
@@ -2200,7 +2325,7 @@ function loop(now) {
       S.t += dt; S.stats.time += dt;
       frameChoose(dt); frameApply(); updateSurfaceCtx(); computeSI(); environment();
       if (S.landed) holdLanded(), frameApply();
-      else if (S.mode === 'ship') { flight(dt); frameStore(); groundContact(); }
+      else if (S.mode === 'ship') { updateFleetProx(); flight(dt); fleetContact(dt); frameStore(); groundContact(); }
       updateAnchor(dt); updateScan(dt);
     }
     map.update(dt, W, H);
@@ -2229,8 +2354,9 @@ function loop(now) {
     if (st !== 'destroyed') {
       if (S.mode === 'foot' && S.walker && S.surf) { holdLanded(); walk(dt); frameApply(); computeSI(); }
       else if (S.landed) { holdLanded(); frameApply(); flight(dt); }
-      else if (!S.warp || S.warp.phase !== 'tunnel') { flight(dt); frameStore(); groundContact(); }
+      else if (!S.warp || S.warp.phase !== 'tunnel') { updateFleetProx(); flight(dt); fleetContact(dt); frameStore(); groundContact(); }
       else { S.angVel.multiplyScalar(0.9); }
+      if (S.mode === 'foot' || S.landed) updateFleetProx();
       updateWarp(dt);
       if (!S.warp) updateAnchor(dt);
       updateScan(dt);

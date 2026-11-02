@@ -672,7 +672,212 @@ function buildExodo(def) {
   return { group: s, cockpit: new THREE.Vector3(0, 6, 318), length: 900 };
 }
 
-const BUILDERS = { andorinha: buildAndorinha, odisseia: buildOdisseia, leviata: buildLeviata, exodo: buildExodo };
+// Esperança: nave-comando da frota (1,3 km). Proa larga com a ponte, espinha longa,
+// dois casulos de hangar laterais e um bloco de motores na popa.
+export const ESPERANCA_DEF = { id: 'esperanca', nome: 'Esperança', reg: 'ESPERANÇA', exhaust: '#ffc070' };
+function buildEsperanca(def) {
+  const s = newShip();
+  const rng = mulberry32(505);
+  const hull = hullMaterial('#c9c2b0', '#c8902a', 55, 140, 0.55, 10, def.reg);
+  const hull2 = hullMaterial('#565b63', '#e0c070', 56, 50, 0.7, 10);
+  const frame = greyMat();
+  // espinha
+  s.add(at(box(70, 60, 820, hull2), 0, 0, -30));
+  const onBox = (w, h, z0, z1, y0 = 0) => (r) => {
+    const side = Math.floor(r() * 4), z = z0 + r() * (z1 - z0);
+    const u = (r() - 0.5) * 0.94;
+    if (side === 0) return { p: new THREE.Vector3(u * w, y0 + h / 2, z), n: new THREE.Vector3(0, 1, 0) };
+    if (side === 1) return { p: new THREE.Vector3(u * w, y0 - h / 2, z), n: new THREE.Vector3(0, -1, 0) };
+    const sx = side === 2 ? 1 : -1;
+    return { p: new THREE.Vector3(sx * w / 2, y0 + u * h, z), n: new THREE.Vector3(sx, 0, 0) };
+  };
+  greebles(s, frame, rng, 900, onBox(70, 60, -430, 370), [1.5, 9]);
+  // módulo de comando (proa)
+  const prof = [[0, 330], [60, 336], [120, 375], [140, 470], [122, 600], [70, 680], [0, 715]];
+  const head = lathe(prof, 6, hull);
+  head.geometry.rotateZ(Math.PI / 6);
+  head.scale.set(1.6, 0.55, 1);
+  s.add(head);
+  greebles(s, hull2, rng, 500, onLathe(prof, 345, 690, 1.6 * 0.87, 0.55 * 0.87), [1.5, 8]);
+  // torre de comando e ponte
+  s.add(at(box(74, 60, 120, hull2), 0, 92, 470));
+  s.add(at(box(46, 46, 50, hull2), 0, 140, 445));
+  s.add(at(box(96, 14, 44, glassMat()), 0, 124, 505));
+  s.add(at(box(98, 3, 46, frame), 0, 132, 505));
+  s.add(at(box(80, 4, 20, lightMat('#ffe2b0', 1.4)), 0, 112, 528));
+  for (const sx of [-1, 1]) antenna(s, sx * 16, 163, 440, 70, 2.4, frame, 0.7, sx * 0.4);
+  // grande prato de comunicação no dorso
+  const dish = lathe([[0, 0], [20, 2], [40, 8], [55, 17], [53, 17.5], [0, 2]], 40, frame);
+  dish.material = frame.clone(); dish.material.side = THREE.DoubleSide;
+  dish.rotation.set(-0.9, 0, 0);
+  s.add(at(dish, 0, 75, 140));
+  s.add(at(cyl(4, 6, 40, hull2, 10).rotateX(Math.PI / 2), 0, 50, 140));
+  // casulos de hangar laterais (bocas iluminadas na frente)
+  const podProf = [[0, -310], [40, -300], [56, -220], [56, 190], [44, 250], [0, 258]];
+  for (const sx of [-1, 1]) {
+    const pod = lathe(podProf, 8, hull);
+    pod.geometry.rotateZ(Math.PI / 8);
+    pod.scale.set(1, 0.8, 1);
+    s.add(at(pod, sx * 190, 0, 0));
+    greebles(s, frame, rng, 260, (r) => { const o = onLathe(podProf, -280, 230, 0.97, 0.78)(r); o.p.x += sx * 190; return o; }, [1, 6]);
+    for (const z of [110, -190]) s.add(at(box(150, 24, 64, hull2), sx * 104, 0, z));
+    s.add(at(box(72, 40, 8, darkMat()), sx * 190, 0, 247));
+    s.add(at(box(64, 32, 2, lightMat('#ffd9a0', 1.5)), sx * 190, 0, 243));
+    for (let k = 0; k < 7; k++) navLight(s, sx * 190 - 30 + k * 10, -23, 252, k % 2 ? '#ffb040' : '#ffffff', 1.2, 1.1, k * 0.12);
+    engine(s, sx * 190, 0, -312, 24, def.exhaust, darkMat());
+    navLight(s, sx * 247, 0, 0, sx > 0 ? '#ff2020' : '#20ff40', 3, 0);
+  }
+  // radiadores verticais
+  const radMat = new THREE.MeshStandardMaterial({ color: 0x2a2620, metalness: 0.5, roughness: 0.6, emissive: 0xff7a2a, emissiveIntensity: 0.22 });
+  for (const sy of [-1, 1]) {
+    s.add(at(box(3, 200, 130, radMat), 0, sy * 132, -330));
+    for (let j = 0; j < 8; j++) s.add(at(box(4.5, 2, 130, frame), 0, sy * (40 + j * 25), -330));
+  }
+  // bloco de motores
+  const aft = [[0, -575], [92, -575], [112, -535], [112, -430], [62, -385], [0, -380]];
+  const block = lathe(aft, 8, hull2);
+  block.geometry.rotateZ(Math.PI / 8);
+  s.add(block);
+  greebles(s, frame, rng, 260, onLathe(aft, -560, -400, 0.95, 0.95), [1.5, 7]);
+  for (let k = 0; k < 4; k++) {
+    const a = (k / 4) * Math.PI * 2 + Math.PI / 4;
+    engine(s, Math.cos(a) * 58, Math.sin(a) * 58, -577, 30, def.exhaust, darkMat());
+  }
+  engine(s, 0, 0, -577, 26, def.exhaust, darkMat());
+  for (const sx of [-1, 1]) for (const z of [600, 300, -200, -480]) rcs(s, sx * 60, 20, z, 9, frame, darkMat());
+  // faixas de luz e luzes de posição
+  for (const sx of [-1, 1]) s.add(at(box(1.2, 1.2, 760, lightMat('#ffd9a0', 1.6)), sx * 36, 22, -30));
+  for (let k = 0; k < 18; k++) for (const sx of [-1, 1]) navLight(s, sx * 37, -24, 340 - k * 42, k % 3 ? '#ffd9a0' : '#ff4030', 1.6, k % 3 ? 0 : 0.7, k * 0.3);
+  navLight(s, 0, 200, 440, '#ff2020', 3, 1.2);
+  return { group: s, cockpit: new THREE.Vector3(0, 124, 505), length: 1330 };
+}
+
+const BUILDERS = { andorinha: buildAndorinha, odisseia: buildOdisseia, leviata: buildLeviata, exodo: buildExodo, esperanca: buildEsperanca };
+
+// ---------------------------------------------------------------------------------------------
+// Colisão: o casco vira um conjunto de caixas (e anéis, para os toros grandes) no espaço local
+// do modelo, em metros. Peças minúsculas (luzes, antenas finas, greebles) ficam de fora.
+// ---------------------------------------------------------------------------------------------
+function collisionShape(outer, inner, length) {
+  outer.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(outer.matrixWorld).invert();
+  const spinning = new Set((inner.userData.rings || []).map((r) => r.g));
+  const minSize = length * 0.015;
+  const boxes = [], tori = [], all = new THREE.Box3();
+  const m = new THREE.Matrix4(), sc = new THREE.Vector3();
+  outer.traverse((o) => {
+    if (!o.isMesh || o.isInstancedMesh) return;
+    const mat = o.material;
+    if (!mat || mat.isShaderMaterial || mat.isMeshBasicMaterial || mat.wireframe) return;
+    let inSpin = false;
+    for (let p = o.parent; p; p = p.parent) if (spinning.has(p)) inSpin = true;
+    m.multiplyMatrices(inv, o.matrixWorld);
+    const g = o.geometry;
+    if (g.type === 'TorusGeometry') {
+      const k = sc.setFromMatrixScale(m).x;
+      if (g.parameters.radius * k > minSize * 2) {
+        const t = { c: new THREE.Vector3().setFromMatrixPosition(m), ax: new THREE.Vector3(0, 0, 1).transformDirection(m), R: g.parameters.radius * k, r: g.parameters.tube * k };
+        tori.push(t);
+        all.union(new THREE.Box3().setFromCenterAndSize(t.c, sc.setScalar((t.R + t.r) * 2)));
+        return;
+      }
+    }
+    if (inSpin) return;
+    if (!g.boundingBox) g.computeBoundingBox();
+    const bb = g.boundingBox.clone().applyMatrix4(m);
+    const size = bb.getSize(sc);
+    if (Math.max(size.x, size.y, size.z) < minSize) return;
+    boxes.push(bb);
+    all.union(bb);
+  });
+  const sphere = all.getBoundingSphere(new THREE.Sphere());
+  return { boxes, tori, all, c: sphere.center, R: sphere.radius };
+}
+
+// Junta as peças fixas que usam o mesmo material numa só malha (de ~150–200 desenhos por nave para ~20).
+// Ficam separadas as peças animadas: jatos, discos dos motores, luzes piscantes e anéis giratórios.
+function mergeStatic(inner) {
+  const ud = inner.userData;
+  const skip = new Set([...ud.exhausts, ...ud.discs, ...ud.blinkers.map((b) => b.m)]);
+  const spinning = new Set((ud.rings || []).map((r) => r.g));
+  inner.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(inner.matrixWorld).invert();
+  const byMat = new Map(), victims = [];
+  const m = new THREE.Matrix4(), nm = new THREE.Matrix3(), v = new THREE.Vector3();
+  inner.traverse((o) => {
+    if (!o.isMesh || o.isInstancedMesh || skip.has(o) || o.material.transparent || o.material.isShaderMaterial) return;
+    for (let p = o.parent; p && p !== inner; p = p.parent) if (spinning.has(p)) return;
+    const g = o.geometry, a = g.attributes;
+    if (!a.position || !a.normal || !a.uv) return;
+    m.multiplyMatrices(inv, o.matrixWorld);
+    if (m.determinant() < 0) return; // espelhada: inverteria a ordem dos vértices
+    nm.getNormalMatrix(m);
+    const n = a.position.count, pos = new Float32Array(n * 3), nrm = new Float32Array(n * 3), uv = new Float32Array(n * 2);
+    for (let i = 0; i < n; i++) {
+      v.fromBufferAttribute(a.position, i).applyMatrix4(m); pos[i * 3] = v.x; pos[i * 3 + 1] = v.y; pos[i * 3 + 2] = v.z;
+      v.fromBufferAttribute(a.normal, i).applyMatrix3(nm).normalize(); nrm[i * 3] = v.x; nrm[i * 3 + 1] = v.y; nrm[i * 3 + 2] = v.z;
+      uv[i * 2] = a.uv.getX(i); uv[i * 2 + 1] = a.uv.getY(i);
+    }
+    const idx = g.index ? Array.from(g.index.array) : Array.from({ length: n }, (_, i) => i);
+    if (!byMat.has(o.material)) byMat.set(o.material, []);
+    byMat.get(o.material).push({ pos, nrm, uv, idx });
+    victims.push(o);
+  });
+  for (const o of victims) o.parent.remove(o);
+  for (const [mat, parts] of byMat) {
+    let nv = 0, ni = 0;
+    for (const p of parts) { nv += p.pos.length / 3; ni += p.idx.length; }
+    const pos = new Float32Array(nv * 3), nrm = new Float32Array(nv * 3), uv = new Float32Array(nv * 2);
+    const idx = nv > 65535 ? new Uint32Array(ni) : new Uint16Array(ni);
+    let ov = 0, oi = 0;
+    for (const p of parts) {
+      pos.set(p.pos, ov * 3); nrm.set(p.nrm, ov * 3); uv.set(p.uv, ov * 2);
+      for (let k = 0; k < p.idx.length; k++) idx[oi + k] = p.idx[k] + ov;
+      ov += p.pos.length / 3; oi += p.idx.length;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    g.setIndex(new THREE.BufferAttribute(idx, 1));
+    g.computeBoundingSphere();
+    inner.add(new THREE.Mesh(g, mat));
+  }
+}
+
+// Distância (com sinal) entre uma esfera (centro p, raio r, no espaço local do modelo) e o casco.
+// Negativa = penetração. outN recebe a direção para empurrar a esfera para fora.
+const _cp = new THREE.Vector3(), _cw = new THREE.Vector3();
+export function probeShape(shape, p, r, outN) {
+  const dc = p.distanceTo(shape.c);
+  if (dc - shape.R - r > 0) { outN.copy(p).sub(shape.c).divideScalar(dc || 1); return dc - shape.R - r; }
+  let best = Infinity;
+  for (const b of shape.boxes) {
+    _cp.set(Math.min(Math.max(p.x, b.min.x), b.max.x), Math.min(Math.max(p.y, b.min.y), b.max.y), Math.min(Math.max(p.z, b.min.z), b.max.z));
+    _cw.subVectors(p, _cp);
+    const d = _cw.length();
+    if (d > 1e-9) {
+      if (d - r < best) { best = d - r; outN.copy(_cw).divideScalar(d); }
+      continue;
+    }
+    // centro dentro da caixa: sai pela face mais próxima
+    const opts = [[p.x - b.min.x, -1, 0, 0], [b.max.x - p.x, 1, 0, 0], [p.y - b.min.y, 0, -1, 0], [b.max.y - p.y, 0, 1, 0], [p.z - b.min.z, 0, 0, -1], [b.max.z - p.z, 0, 0, 1]];
+    let o = opts[0];
+    for (const q of opts) if (q[0] < o[0]) o = q;
+    if (-o[0] - r < best) { best = -o[0] - r; outN.set(o[1], o[2], o[3]); }
+  }
+  for (const t of shape.tori) {
+    _cw.subVectors(p, t.c);
+    const h = _cw.dot(t.ax);
+    _cp.copy(_cw).addScaledVector(t.ax, -h);
+    const rl = _cp.length();
+    if (rl < 1e-9) _cp.set(1, 0, 0).cross(t.ax).normalize(); else _cp.divideScalar(rl);
+    _cw.addScaledVector(_cp, -t.R); // do ponto mais próximo do círculo central até p
+    const d = _cw.length();
+    if (d - t.r - r < best) { best = d - t.r - r; outN.copy(_cw).divideScalar(d || 1); }
+  }
+  return best;
+}
 
 // Ajusta o relevo dos cascos à escala em que o modelo é exibido (o relevo do three.js depende da escala do mundo)
 export function setShipScale(group, metersToWorld, shipMeters) {
@@ -681,19 +886,32 @@ export function setShipScale(group, metersToWorld, shipMeters) {
   group.traverse((o) => { if (o.material && o.material.bumpMap) o.material.bumpScale = h * metersToWorld; });
 }
 
-// Retorna um objeto com o modelo já escalado para km e com frente em -Z
-export function buildShip(def) {
+// Retorna um objeto com o modelo já escalado para km e com frente em -Z.
+// scale amplia o modelo (variantes maiores para as naves da frota).
+export function buildShip(def, scale = 1) {
   const built = BUILDERS[def.id](def);
   const inner = built.group;
   inner.rotation.y = Math.PI;
   const outer = new THREE.Group();
   outer.add(inner);
-  setShipScale(outer, 0.001, built.length);
+  const unit = 0.001 * scale; // km por unidade local (metro do modelo-base)
+  setShipScale(outer, unit, built.length * scale);
   const ck = built.cockpit.clone();
-  const cockpit = new THREE.Vector3(-ck.x, ck.y, -ck.z).multiplyScalar(0.001);
+  const cockpit = new THREE.Vector3(-ck.x, ck.y, -ck.z).multiplyScalar(unit);
   const ud = inner.userData;
+  const shape = collisionShape(outer, inner, built.length);
+  mergeStatic(inner);
+  // a nave do jogador colide como uma fileira de esferas ao longo do eixo longitudinal (km, espaço da nave)
+  const a = shape.all, sz = a.getSize(new THREE.Vector3()), ctr = a.getCenter(new THREE.Vector3());
+  const r = Math.min(Math.min(sz.x, sz.y) * 0.45, sz.z / 2);
+  const n = Math.min(7, Math.max(1, Math.ceil(sz.z / (2 * r))));
+  const spheres = [];
+  for (let k = 0; k < n; k++) {
+    const z = n === 1 ? ctr.z : a.min.z + r + ((sz.z - 2 * r) * k) / (n - 1);
+    spheres.push({ c: new THREE.Vector3(ctr.x, ctr.y, z).multiplyScalar(unit), r: r * unit });
+  }
   return {
-    def, group: outer, cockpit, length: built.length * 0.001, meters: built.length,
+    def, group: outer, cockpit, length: built.length * unit, meters: built.length * scale, unit, shape, spheres,
     update(t, power, warp = 0) {
       for (const e of ud.exhausts) {
         e.material.uniforms.uPower.value = power;

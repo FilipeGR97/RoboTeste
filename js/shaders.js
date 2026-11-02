@@ -829,6 +829,22 @@ export function streakMaterial() {
 // -------------------------------------------------------------------------------------------------
 // Pós-processamento cinematográfico (aberração cromática, vinheta, granulação, desfoque radial)
 // -------------------------------------------------------------------------------------------------
+// Remove NaN/infinito antes do bloom: um único pixel inválido, espalhado pelos níveis de baixa
+// resolução do bloom (mesmo os de peso zero, pois 0·NaN = NaN), vira um bloco preto de meia tela
+export const SanitizeShader = {
+  uniforms: { tDiffuse: { value: null } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse; varying vec2 vUv;
+    // expoente todo em 1 = NaN ou infinito (teste pelos bits: o compilador do D3D pode apagar isnan())
+    bool bad(float x) { return (floatBitsToUint(x) & 0x7f800000u) == 0x7f800000u; }
+    void main() {
+      vec4 c = texture2D(tDiffuse, vUv);
+      if (bad(c.r) || bad(c.g) || bad(c.b) || bad(c.a)) c = vec4(0.0, 0.0, 0.0, 1.0);
+      gl_FragColor = clamp(c, 0.0, 6.0e4);
+    }`,
+};
+
 export const CinematicShader = {
   uniforms: {
     tDiffuse: { value: null }, uTime: { value: 0 }, uGrain: { value: 0.035 }, uVignette: { value: 0.55 },

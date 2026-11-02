@@ -17,6 +17,7 @@
   <div id="maplabels"></div>
 
   <!-- HUD de voo -->
+  <div id="fps" class="hidden"></div>
   <div id="hud" class="hidden">
     <div id="hud-tl" class="hudbox">
       <div class="k">SISTEMA</div>
@@ -66,6 +67,7 @@
     <div id="tarrow" class="hidden">➤</div>
     <div id="wmarker" class="hidden"><span></span></div>
     <div id="warrow" class="hidden">◆</div>
+    <div id="approach" class="hidden"><div id="ap-name"></div><div id="ap-gap"></div><div id="ap-vel"></div></div>
     <div id="prompts"></div>
     <div id="toast" class="hidden"></div>
     <div id="subs"></div>
@@ -153,6 +155,7 @@
       <div class="menu">
         <button class="btn big" id="btn-new">Nova jornada</button>
         <button class="btn big hidden" id="btn-continue">Continuar</button>
+        <button class="btn" id="btn-options">Opções</button>
         <button class="btn" id="btn-help">Controles</button>
       </div>
       <div class="foot">Use fones de ouvido. Coloque sua própria trilha em <code>musica/trilha.mp3</code> se quiser.</div>
@@ -175,17 +178,23 @@
 
   <div id="pause" class="screen hidden">
     <div class="pause-box">
-      <h2>PAUSA</h2>
+      <h2 id="pause-title">PAUSA</h2>
+      <div class="opt-sec">ÁUDIO</div>
       <div class="row"><label>Música</label><input type="range" id="vol-music" min="0" max="1" step="0.01" /></div>
       <div class="row"><label>Efeitos</label><input type="range" id="vol-sfx" min="0" max="1" step="0.01" /></div>
       <div class="row"><label>Ambiência</label><input type="range" id="vol-amb" min="0" max="1" step="0.01" /></div>
-      <div class="row"><label>Campo de visão</label><input type="range" id="opt-fov" min="45" max="90" step="1" /></div>
+      <div class="row"><label>Tique-taque do relógio</label><input type="checkbox" id="opt-tick" /></div>
+      <div class="opt-sec">VÍDEO</div>
       <div class="row"><label>Qualidade</label>
         <select id="opt-quality"><option value="0.6">Baixa</option><option value="0.85">Média</option><option value="1">Alta</option><option value="1.5">Ultra</option></select>
       </div>
+      <div class="row"><label>Campo de visão</label><input type="range" id="opt-fov" min="45" max="90" step="1" /></div>
       <div class="row"><label>Brilho</label><input type="range" id="opt-exposure" min="0.5" max="2" step="0.05" /></div>
+      <div class="row"><label>Mostrar FPS</label><input type="checkbox" id="opt-fps" /></div>
+      <div class="opt-sec">CONTROLES</div>
+      <div class="row"><label>Sensibilidade do mouse · voo</label><input type="range" id="opt-steer" min="0.3" max="2.5" step="0.05" /></div>
+      <div class="row"><label>Sensibilidade do mouse · a pé</label><input type="range" id="opt-look" min="0.3" max="2.5" step="0.05" /></div>
       <div class="row"><label>Inverter eixo Y</label><input type="checkbox" id="opt-invert" /></div>
-      <div class="row"><label>Tique-taque do relógio</label><input type="checkbox" id="opt-tick" /></div>
       <div class="row"><label>Trilha</label>
         <button class="btn small" id="music-file-btn">Carregar música…</button>
         <button class="btn small" id="music-organ">Trilha original</button>
@@ -194,6 +203,7 @@
       <div class="menu">
         <button class="btn big" id="btn-resume">Continuar</button>
         <button class="btn" id="btn-menu">Salvar e voltar ao menu</button>
+        <button class="btn big hidden" id="btn-opt-back">Voltar</button>
       </div>
     </div>
   </div>

@@ -74,6 +74,20 @@ code { color: #fff; background: rgba(255, 255, 255, 0.08); padding: 1px 5px; bor
 .pause-box input[type=range] { width: 220px; accent-color: #8fd0ff; }
 .pause-box select { background: #0a1520; color: var(--hud); border: 1px solid var(--hud-dim); padding: 4px 8px; font-family: var(--font); font-size: 15px; }
 .pause-box .menu { margin-top: 24px; }
+.pause-box { max-height: 92vh; overflow-y: auto; }
+.pause-box .opt-sec { margin: 18px 0 2px; font-size: 12px; letter-spacing: 4px; color: var(--hud-dim); border-bottom: 1px solid var(--hud-faint); padding-bottom: 4px; }
+.pause-box .row { margin: 9px 0; }
+#pause.from-title #btn-resume, #pause.from-title #btn-menu { display: none; }
+#fps { position: fixed; top: 6px; right: 8px; z-index: 50; font: 600 13px var(--font); color: #9fe0a0; background: rgba(0, 0, 0, 0.45); padding: 2px 7px; pointer-events: none; }
+/* painel de aproximação (perto de uma nave da frota) */
+#approach { position: absolute; top: 44%; left: calc(50% + 150px); text-align: left; padding: 6px 18px; background: rgba(2, 10, 20, 0.55); border-top: 1px solid var(--ap, #7fe0a0); border-bottom: 1px solid var(--ap, #7fe0a0); min-width: 230px; pointer-events: none; }
+#approach #ap-name { font-size: 12px; letter-spacing: 3px; color: var(--hud-dim); }
+#approach #ap-gap { font: 700 26px var(--title); color: var(--ap); line-height: 1.2; }
+#approach #ap-vel { font-size: 14px; color: #cfe6f8; }
+#approach.ap-ok { --ap: #7fe0a0; }
+#approach.ap-warn { --ap: #ffc860; }
+#approach.ap-danger { --ap: #ff6050; animation: apblink 0.5s steps(2) infinite; }
+@keyframes apblink { 50% { background: rgba(70, 6, 4, 0.6); } }
 
 #ending { background: rgba(0, 0, 0, 0.55); flex-direction: column; text-align: center; animation: fadein 4s ease; }
 #ending h1 { font-family: var(--title); font-size: clamp(40px, 6vw, 84px); letter-spacing: 12px; color: #eafff4; text-shadow: 0 0 40px rgba(120, 255, 200, 0.5); margin: 0 0 10px; }
