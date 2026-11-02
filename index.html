@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Último Horizonte</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800&family=Rajdhani:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+  <script type="importmap">
+    { "imports": { "three": "./lib/three/build/three.module.js", "three/addons/": "./lib/three/examples/jsm/" } }
+  </script>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="labels"></div>
+  <div id="maplabels"></div>
+
+  <!-- HUD de voo -->
+  <div id="hud" class="hidden">
+    <div id="hud-tl" class="hudbox">
+      <div class="k">SISTEMA</div>
+      <div id="h-sys" class="big">—</div>
+      <div id="h-sys2" class="small">—</div>
+      <div id="h-loc" class="small">—</div>
+      <div id="h-home" class="small">—</div>
+    </div>
+    <div id="objective">
+      <div class="ok"><span class="dot"></span>OBJETIVO <span id="m-step"></span></div>
+      <div id="m-title">—</div>
+      <div id="m-text">—</div>
+      <div id="m-keys"></div>
+    </div>
+    <div id="hud-tr" class="hudbox hidden">
+      <div class="k">ALVO</div>
+      <div id="h-tname" class="big">—</div>
+      <div id="h-ttype" class="small">—</div>
+      <div id="h-tdist" class="small">—</div>
+      <div id="h-teta" class="small">—</div>
+      <div id="h-tact" class="small act"></div>
+    </div>
+    <div id="surfbox" class="hudbox hidden">
+      <div class="k">SUPERFÍCIE</div>
+      <div id="s-name" class="big">—</div>
+      <div id="s-alt" class="small">—</div>
+      <div id="s-env" class="small">—</div>
+      <div id="s-act" class="small act"></div>
+    </div>
+    <div id="hazard" class="hidden"></div>
+    <div id="hud-bottom">
+      <div id="throttle"><div id="throttle-fill"></div><div class="tlabel">PROPULSÃO</div></div>
+      <div id="speedbox">
+        <div id="h-speed">0 m/s</div>
+        <div id="h-mode">SUBLUMÍNICO</div>
+        <div id="h-ap" class="hidden">PILOTO AUTOMÁTICO</div>
+      </div>
+      <div id="shipbox">
+        <div id="h-ship">—</div>
+        <div id="h-range" class="small">—</div>
+        <div id="hull"><span class="k">CASCO</span><div class="bar"><div id="hull-fill"></div></div><span id="hull-txt">100%</span></div>
+      </div>
+    </div>
+    <div id="reticle"></div>
+    <svg id="steer" width="100%" height="100%"><line id="steer-line" x1="0" y1="0" x2="0" y2="0" /><circle id="steer-dot" r="5" cx="-50" cy="-50" /></svg>
+    <div id="tmarker" class="hidden"><span></span></div>
+    <div id="tarrow" class="hidden">➤</div>
+    <div id="wmarker" class="hidden"><span></span></div>
+    <div id="warrow" class="hidden">◆</div>
+    <div id="prompts"></div>
+    <div id="toast" class="hidden"></div>
+    <div id="subs"></div>
+    <div id="hint">[H] Controles · [M] Mapa · [Tab] Sistema · [F] Escanear · [T] Objetivo</div>
+    <div id="scanbar" class="hidden"><div class="k" id="scanlabel">ESCANEANDO</div><div id="scanname"></div><div class="bar"><div id="scanfill"></div></div></div>
+    <div id="warpinfo" class="hidden"></div>
+  </div>
+
+  <!-- Painéis -->
+  <div id="sysPanel" class="panel hidden"></div>
+  <div id="scanPanel" class="panel hidden"></div>
+  <div id="logPanel" class="panel hidden"></div>
+  <div id="helpPanel" class="panel hidden">
+    <h2>Controles</h2>
+    <div class="cols">
+      <div>
+        <h3>Voo</h3>
+        <p><b>Botão esquerdo (segurar)</b> apontar a nave para o cursor</p>
+        <p><b>W / S</b> acelerar / desacelerar · <b>1–0</b> propulsão 10–100%</p>
+        <p><b>Z</b> propulsão máxima · <b>X</b> parar</p>
+        <p><b>A / D</b> ou <b>← / →</b> guinada · <b>↑ / ↓</b> arfagem</p>
+        <p><b>Q / E</b> rolagem · <b>Shift</b> impulso (×4)</p>
+        <p><b>Botão direito (arrastar)</b> olhar em volta · <b>Roda</b> zoom</p>
+        <p><b>C</b> câmera (externa / cabine)</p>
+        <h3>Superfície</h3>
+        <p><b>P</b> pouso automático / decolar · <b>W</b> decolar</p>
+        <p><b>E</b> desembarcar / voltar à nave</p>
+        <p>A pé: <b>WASD</b> andar · <b>Shift</b> correr · <b>Espaço</b> pular · <b>mouse</b> olhar · <b>F</b> coletar amostra</p>
+      </div>
+      <div>
+        <h3>Navegação</h3>
+        <p><b>Clique</b> num astro: vira alvo e a nave aponta para ele</p>
+        <p><b>Duplo clique</b> num astro: piloto automático até ele</p>
+        <p><b>Tab</b> lista do sistema · <b>M</b> mapa galáctico</p>
+        <p><b>G</b> piloto automático até o alvo · <b>T</b> alvo do objetivo</p>
+        <p><b>J</b> salto até a estrela-alvo (se estiver longe, salto parcial)</p>
+        <p><b>F</b> escanear planeta · <b>L</b> diário de bordo</p>
+        <p><b>R</b> (segurar) interagir com naves da frota</p>
+        <p><b>O</b> órbitas · <b>N</b> rótulos · <b>U</b> esconder HUD</p>
+        <p><b>Esc</b> pausa e configurações</p>
+      </div>
+    </div>
+    <p class="note">Perto de um planeta a nave acompanha a órbita e a rotação dele. Bater no chão rápido demais, mergulhar num gigante gasoso, descer em Vênus ou num mundo de lava, ou chegar perto demais de uma estrela ou buraco negro destrói a nave — como seria de verdade. A velocidade se adapta à distância do astro mais próximo: perto de planetas você voa devagar; no espaço aberto, milhares de vezes a velocidade da luz. O painel OBJETIVO (à esquerda) sempre diz o próximo passo da missão. Buracos negros reais estão no mapa — Gaia BH1 é o mais próximo, a 1.560 anos-luz.</p>
+    <button class="btn" data-close="helpPanel">Fechar</button>
+  </div>
+
+  <!-- Mapa galáctico -->
+  <div id="mapUI" class="hidden">
+    <div id="map-top">
+      <div class="title">MAPA GALÁCTICO <span>· Braço de Órion</span></div>
+      <input id="map-search" placeholder="Buscar estrela… (ex: Sirius, TRAPPIST-1)" autocomplete="off" />
+      <button class="btn small" id="map-ship">Centralizar na nave</button>
+      <button class="btn small" id="map-sol">Sol</button>
+      <button class="btn small" id="map-bio">Bioassinatura</button>
+      <button class="btn small" id="map-exo-btn">Exoplanetas</button>
+      <button class="btn small" id="map-close">Fechar [M]</button>
+    </div>
+    <div id="map-info" class="hidden"></div>
+    <div id="map-exo" class="hidden">
+      <div class="exo-head">CATÁLOGO DE EXOPLANETAS</div>
+      <div class="exo-note">Catálogo da Terra + sistemas visitados + sensores de longo alcance (25 al ao redor da nave)</div>
+      <div class="exo-filters">
+        <button class="chip on" data-f="todos">Todos</button>
+        <button class="chip" data-f="hz">Zona habitável</button>
+        <button class="chip" data-f="alcance">No alcance</button>
+        <button class="chip" data-f="novos">Não visitados</button>
+      </div>
+      <div id="exo-list"></div>
+    </div>
+    <div id="map-legend">
+      <span><i class="lg-range"></i> Alcance de salto</span>
+      <span><i class="lg-bio"></i> Zona da bioassinatura</span>
+      <span><i class="lg-vis"></i> Visitado</span>
+      <span><i class="lg-bh"></i> Buraco negro</span>
+      <span><i class="lg-fleet"></i> Frota da Diáspora</span>
+      <span class="muted">Arrastar: girar · Roda: zoom · Botão direito: mover · Duplo clique: focar</span>
+    </div>
+  </div>
+
+  <!-- Telas -->
+  <div id="title" class="screen">
+    <div class="title-wrap">
+      <div class="pre">UMA JORNADA PARA ALÉM DO SOL</div>
+      <h1>ÚLTIMO<br />HORIZONTE</h1>
+      <div class="menu">
+        <button class="btn big" id="btn-new">Nova jornada</button>
+        <button class="btn big hidden" id="btn-continue">Continuar</button>
+        <button class="btn" id="btn-help">Controles</button>
+      </div>
+      <div class="foot">Use fones de ouvido. Coloque sua própria trilha em <code>musica/trilha.mp3</code> se quiser.</div>
+    </div>
+  </div>
+
+  <div id="intro" class="screen hidden">
+    <div id="intro-text"></div>
+    <button class="btn small" id="intro-skip">Pular ›</button>
+  </div>
+
+  <div id="select" class="screen hidden">
+    <div class="sel-head">ESCOLHA SUA NAVE</div>
+    <button class="arrow left" id="sel-prev">‹</button>
+    <button class="arrow right" id="sel-next">›</button>
+    <div id="sel-card"></div>
+    <div id="sel-dots"></div>
+    <button class="btn big" id="sel-go">Embarcar</button>
+  </div>
+
+  <div id="pause" class="screen hidden">
+    <div class="pause-box">
+      <h2>PAUSA</h2>
+      <div class="row"><label>Música</label><input type="range" id="vol-music" min="0" max="1" step="0.01" /></div>
+      <div class="row"><label>Efeitos</label><input type="range" id="vol-sfx" min="0" max="1" step="0.01" /></div>
+      <div class="row"><label>Ambiência</label><input type="range" id="vol-amb" min="0" max="1" step="0.01" /></div>
+      <div class="row"><label>Campo de visão</label><input type="range" id="opt-fov" min="45" max="90" step="1" /></div>
+      <div class="row"><label>Qualidade</label>
+        <select id="opt-quality"><option value="0.6">Baixa</option><option value="0.85">Média</option><option value="1">Alta</option><option value="1.5">Ultra</option></select>
+      </div>
+      <div class="row"><label>Brilho</label><input type="range" id="opt-exposure" min="0.5" max="2" step="0.05" /></div>
+      <div class="row"><label>Inverter eixo Y</label><input type="checkbox" id="opt-invert" /></div>
+      <div class="row"><label>Tique-taque do relógio</label><input type="checkbox" id="opt-tick" /></div>
+      <div class="row"><label>Trilha</label>
+        <button class="btn small" id="music-file-btn">Carregar música…</button>
+        <button class="btn small" id="music-organ">Trilha original</button>
+        <input type="file" id="music-file" accept="audio/*" class="hidden" />
+      </div>
+      <div class="menu">
+        <button class="btn big" id="btn-resume">Continuar</button>
+        <button class="btn" id="btn-menu">Salvar e voltar ao menu</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="ending" class="screen hidden"></div>
+  <div id="storyPanel" class="panel hidden"></div>
+  <div id="destroyed" class="screen hidden">
+    <div class="dbox">
+      <div class="pre">SINAL PERDIDO</div>
+      <h1>NAVE DESTRUÍDA</h1>
+      <p id="d-cause"></p>
+      <div class="menu"><button class="btn big" id="d-retry">Voltar ao último salvamento</button><button class="btn" id="d-menu">Menu principal</button></div>
+    </div>
+  </div>
+  <div id="fade"></div>
+  <div id="loading"><div class="spinner"></div><div id="loading-text">Gerando a galáxia…</div></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+Coloque aqui um arquivo chamado  trilha.mp3  (ou trilha.ogg / trilha.m4a / trilha.wav)
+e o jogo vai tocar essa música em loop no lugar da trilha de órgão gerada pelo jogo.
+
+Exemplo: a trilha de Interstellar (Hans Zimmer) que você tiver no seu computador.
+Também dá para escolher um arquivo pelo menu de pausa (Esc) -> "Carregar música…".

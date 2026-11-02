@@ -1,0 +1,15 @@
+{
+  "name": "ultimo-horizonte",
+  "version": "1.0.0",
+  "description": "Explora\u00e7\u00e3o espacial em WebGL",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "three": "^0.170.0"
+  },
+  "type": "module"
+}
