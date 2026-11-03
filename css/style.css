@@ -80,11 +80,23 @@ code { color: #fff; background: rgba(255, 255, 255, 0.08); padding: 1px 5px; bor
 #pause.from-title #btn-resume, #pause.from-title #btn-menu { display: none; }
 #fps { position: fixed; top: 6px; right: 8px; z-index: 50; font: 600 13px var(--font); color: #9fe0a0; background: rgba(0, 0, 0, 0.45); padding: 2px 7px; pointer-events: none; }
 /* painel de aproximação (perto de uma nave da frota) */
-#approach { position: absolute; top: 44%; left: calc(50% + 150px); text-align: left; padding: 6px 18px; background: rgba(2, 10, 20, 0.55); border-top: 1px solid var(--ap, #7fe0a0); border-bottom: 1px solid var(--ap, #7fe0a0); min-width: 230px; pointer-events: none; }
+#approach { position: absolute; top: 44%; left: calc(50% + 270px); text-align: left; padding: 6px 18px; background: rgba(2, 10, 20, 0.55); border-top: 1px solid var(--ap, #7fe0a0); border-bottom: 1px solid var(--ap, #7fe0a0); min-width: 230px; pointer-events: none; }
 #approach #ap-name { font-size: 12px; letter-spacing: 3px; color: var(--hud-dim); }
 #approach #ap-gap { font: 700 26px var(--title); color: var(--ap); line-height: 1.2; }
 #approach #ap-vel { font-size: 14px; color: #cfe6f8; }
 #approach.ap-ok { --ap: #7fe0a0; }
+#horizon { position: absolute; inset: 0; pointer-events: none; }
+#hz-line { position: absolute; left: 0; top: 0; width: 420px; height: 0; margin-left: -210px; }
+#hz-line::before, #hz-line::after { content: ''; position: absolute; top: -1px; width: 150px; height: 2px; background: rgba(169, 220, 255, 0.5); }
+#hz-line::before { left: 0; border-left: 2px solid rgba(169, 220, 255, 0.5); height: 6px; background: linear-gradient(rgba(169, 220, 255, 0.5) 2px, transparent 2px); }
+#hz-line::after { right: 0; border-right: 2px solid rgba(169, 220, 255, 0.5); height: 6px; background: linear-gradient(rgba(169, 220, 255, 0.5) 2px, transparent 2px); }
+#hz-box { position: absolute; top: 44%; right: calc(50% + 270px); text-align: right; padding: 6px 18px; background: rgba(2, 10, 20, 0.55); border-top: 1px solid var(--hz, rgba(169, 220, 255, 0.5)); border-bottom: 1px solid var(--hz, rgba(169, 220, 255, 0.5)); min-width: 170px; }
+#hz-box .k { font-size: 12px; letter-spacing: 3px; color: var(--hud-dim); }
+#hz-alt { font: 700 24px var(--title); color: var(--hz, #cfe6f8); line-height: 1.2; }
+#hz-vs { font-size: 14px; color: #cfe6f8; }
+#hz-box.hz-warn { --hz: #ffc860; }
+#gpws { position: absolute; top: 31%; left: 50%; transform: translateX(-50%); font: 700 22px var(--title); letter-spacing: 6px; color: #ff6050; text-shadow: 0 0 12px rgba(255, 60, 40, 0.6); animation: apblink 0.5s steps(2) infinite; pointer-events: none; }
+#hz-box.hz-danger { --hz: #ff6050; animation: apblink 0.5s steps(2) infinite; }
 #approach.ap-warn { --ap: #ffc860; }
 #approach.ap-danger { --ap: #ff6050; animation: apblink 0.5s steps(2) infinite; }
 @keyframes apblink { 50% { background: rgba(70, 6, 4, 0.6); } }
@@ -272,7 +284,7 @@ code { color: #fff; background: rgba(255, 255, 255, 0.08); padding: 1px 5px; bor
 .sub.glitch { animation: subin 0.35s ease, glitch 0.25s steps(2) infinite; }
 @keyframes subin { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes glitch { 0% { transform: translateX(0); opacity: 1; } 50% { transform: translateX(2px); opacity: 0.75; } }
-#toast { position: absolute; top: 118px; left: 50%; transform: translateX(-50%); font-size: 15px; color: #cfe8ff; background: rgba(2, 10, 20, 0.6); padding: 6px 16px; border-left: 2px solid #5ce1ff; white-space: nowrap; animation: subin 0.3s ease; }
+#toast { position: absolute; top: 118px; left: 50%; transform: translateX(-50%); font-size: 15px; color: #cfe8ff; background: rgba(2, 10, 20, 0.6); padding: 6px 16px; border-left: 2px solid #5ce1ff; width: max-content; max-width: min(900px, 80vw); animation: subin 0.3s ease; }
 #toast.warn { border-left-color: var(--warn); color: #ffe6c0; }
 #wmarker::after { content: 'OBJETIVO'; position: absolute; top: -26px; left: 0; transform: translateX(-50%); font-family: var(--title); font-size: 9px; letter-spacing: 3px; color: #5ce1ff; }
 .blabel.fleet { color: #ffd27a; } .blabel.shadow { color: #c49bff; }

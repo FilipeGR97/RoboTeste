@@ -12,6 +12,42 @@ const CHORDS = [
   [45, 52, 57, 60, 64], // Lá m
   [40, 52, 56, 59, 64], // Mi
 ];
+// II — "Deriva": ré menor, acordes de 20 s e sinos esparsos com eco (flutuar no vazio)
+const DERIVA = [
+  [38, 50, 57, 62, 64], // Ré m(add9)
+  [34, 46, 53, 57, 62], // Si♭ maj7
+  [41, 48, 57, 60, 65], // Fá
+  [36, 48, 55, 62, 64], // Dó(add9)
+  [38, 50, 53, 57, 64], // Ré m9
+  [43, 50, 55, 58, 65], // Sol m7
+  [34, 50, 53, 57, 62], // Si♭/Ré
+  [45, 52, 57, 61, 64], // Lá (dominante)
+];
+// III — "Pulso": mi menor, relógio a cada 1,25 s e ostinato que cresce (tensão)
+const PULSO = [
+  [40, 52, 55, 59, 64], // Mi m
+  [36, 48, 55, 59, 64], // Dó maj7
+  [43, 50, 55, 59, 62], // Sol
+  [38, 50, 57, 62, 66], // Ré
+  [40, 52, 55, 59, 67], // Mi m
+  [36, 52, 55, 60, 64], // Dó
+  [45, 52, 57, 60, 64], // Lá m
+  [35, 47, 54, 59, 63], // Si
+];
+// As três peças usam o mesmo órgão e a mesma reverberação. A troca acontece sempre na virada de um acorde,
+// com as notas da peça anterior ainda soando (3 s de sobreposição): não há corte nem recomeço
+const PIECES = {
+  horizonte: { chords: CHORDS, dur: 15 },
+  deriva: { chords: DERIVA, dur: 20 },
+  pulso: { chords: PULSO, dur: 12.5 },
+};
+// rodízio de cada clima; cada peça toca duas voltas completas antes de passar a vez
+const MOODS = {
+  title: ['horizonte'],
+  explore: ['horizonte', 'deriva', 'horizonte', 'pulso'],
+  deep: ['deriva', 'horizonte'],
+  tension: ['pulso'],
+};
 const ORGAN = [[0.5, 0.32], [1, 1], [2, 0.55], [3, 0.2], [4, 0.2], [6, 0.06], [8, 0.05]];
 
 export class AudioEngine {
@@ -79,30 +115,127 @@ export class AudioEngine {
 
   // ---------------------------------------------------------------- trilha
   startMusic() {
-    this.chordIdx = 0; this.pass = 0;
+    this.mood = this.mood || 'title';
+    this.piece = null; this.chordIdx = 0; this.stint = 0;
+    this.passes = { horizonte: 0, deriva: 0, pulso: 0 };
+    this.rot = {};
     this.nextChordAt = this.ctx.currentTime + 0.5;
+    this.nextTickAt = this.ctx.currentTime + 0.5;
     this.musicTimer = setInterval(() => this.scheduleMusic(), 500);
+  }
+
+  // clima pedido pelo jogo: 'title', 'explore', 'deep' (espaço interestelar) ou 'tension' (Sombras, perigo)
+  setMood(m) {
+    if (m !== this.mood && this.mood === 'tension') this.stint = Math.max(this.stint, 2); // passado o perigo, o Pulso encerra a volta e sai
+    this.mood = m;
+  }
+  musicName() { return this.custom ? 'trilha própria' : this.piece; }
+
+  choosePiece() {
+    const pool = MOODS[this.mood] || MOODS.explore;
+    const fits = this.piece && pool.includes(this.piece);
+    // dentro do clima: só troca ao fim da segunda volta; fora dele: troca já, na próxima virada de acorde
+    if (fits && (this.chordIdx !== 0 || this.stint < 2)) return;
+    let i = this.rot[this.mood] ?? -1;
+    let next = this.piece;
+    for (let k = 0; k < pool.length && (next === this.piece || !next); k++) { i = (i + 1) % pool.length; next = pool[i]; }
+    this.rot[this.mood] = i;
+    if (next !== this.piece) { this.piece = next; this.chordIdx = 0; }
+    this.stint = 0;
   }
 
   scheduleMusic() {
     const ctx = this.ctx;
+    // relógio (opção "tique-taque" ou a peça Pulso): agendado no tempo do áudio, sem atrasos do navegador
+    while (this.nextTickAt < ctx.currentTime + 1) {
+      if (this.ticking || this.piece === 'pulso' || this.mood === 'tension') this.tick(this.nextTickAt, this.piece === 'pulso' && !this.custom ? 0.06 : 0.05);
+      this.nextTickAt += 1.25;
+    }
     if (this.custom) return;
     while (this.nextChordAt < ctx.currentTime + 2) {
-      const t = this.nextChordAt, dur = 15;
-      const chord = CHORDS[this.chordIdx];
-      const section = this.pass % 4; // 0 calmo, 1 ostinato, 2 pleno, 3 rarefeito
-      const vel = section === 2 ? 0.05 : section === 3 ? 0.026 : 0.036;
-      chord.forEach((m, k) => {
-        if (section === 3 && k === 2) return;
-        this.organNote(m, t, dur, vel * (k === 0 ? 1.1 : 1), section === 2 ? 2600 : 1500);
-      });
-      if (section >= 1 && section <= 2) this.ostinato(chord, t, dur, section === 2 ? 0.03 : 0.018);
-      if (section === 2) this.organNote(chord[0] - 12, t, dur, 0.06, 400);
-      if (section === 3 && this.chordIdx % 2 === 0) this.organNote(chord[4] + 12, t + 3, 9, 0.012, 3000);
+      this.choosePiece();
+      const P = PIECES[this.piece];
+      const t = this.nextChordAt, dur = P.dur;
+      const chord = P.chords[this.chordIdx];
+      const section = this.passes[this.piece] % 4; // 0 calmo, 1 movimento, 2 pleno, 3 rarefeito
+      if (this.piece === 'deriva') this.playDeriva(chord, t, dur, section);
+      else if (this.piece === 'pulso') this.playPulso(chord, t, dur, section);
+      else this.playHorizonte(chord, t, dur, section);
       this.nextChordAt += dur - 3; // sobreposição de 3 s
-      this.chordIdx = (this.chordIdx + 1) % CHORDS.length;
-      if (this.chordIdx === 0) this.pass++;
+      this.chordIdx = (this.chordIdx + 1) % P.chords.length;
+      if (this.chordIdx === 0) { this.passes[this.piece]++; this.stint++; }
     }
+  }
+
+  // I — "Horizonte": o órgão original
+  playHorizonte(chord, t, dur, section) {
+    const vel = section === 2 ? 0.05 : section === 3 ? 0.026 : 0.036;
+    chord.forEach((m, k) => {
+      if (section === 3 && k === 2) return;
+      this.organNote(m, t, dur, vel * (k === 0 ? 1.1 : 1), section === 2 ? 2600 : 1500);
+    });
+    if (section >= 1 && section <= 2) this.ostinato(chord, t, dur, section === 2 ? 0.03 : 0.018);
+    if (section === 2) this.organNote(chord[0] - 12, t, dur, 0.06, 400);
+    if (section === 3 && this.chordIdx % 2 === 0) this.organNote(chord[4] + 12, t + 3, 9, 0.012, 3000);
+  }
+
+  // II — "Deriva": órgão abafado e distante, sinos com eco, brilho agudo nas voltas cheias
+  playDeriva(chord, t, dur, section) {
+    chord.forEach((m, k) => this.organNote(m, t, dur, (section === 2 ? 0.032 : 0.024) * (k === 0 ? 1.15 : 1), section === 0 ? 700 : 1100));
+    if (section === 3) this.organNote(chord[0] - 12, t, dur, 0.05, 300);
+    const n = section === 0 ? 2 : section === 2 ? 6 : 4;
+    const tones = [chord[2], chord[3], chord[4]];
+    for (let i = 0; i < n; i++) {
+      const at = t + 1.5 + Math.random() * (dur - 6);
+      const m = tones[(Math.random() * tones.length) | 0] + (Math.random() < 0.5 ? 12 : 24);
+      const v = 0.022 + Math.random() * 0.012;
+      this.bell(m, at, v);
+      this.bell(m, at + 0.75, v * 0.45); this.bell(m, at + 1.5, v * 0.2); // eco
+    }
+    if (section === 2) this.organNote(chord[4] + 24, t + 4, dur - 4, 0.006, 5000);
+  }
+
+  // III — "Pulso": o relógio marca o tempo, o ostinato acelera e o órgão cresce a cada volta
+  playPulso(chord, t, dur, section) {
+    const grow = [0.03, 0.038, 0.05, 0.028][section];
+    chord.forEach((m, k) => this.organNote(m, t, dur, grow * (k === 0 ? 1.1 : 1), section === 2 ? 3000 : 1800));
+    if (section >= 1) this.organNote(chord[0] - 12, t, dur, section === 2 ? 0.07 : 0.045, 380);
+    if (section !== 3) {
+      const pat = [chord[2], chord[3], chord[4], chord[3]].map((m) => m + 12);
+      if (section === 2) pat.push(chord[4] + 12, chord[3] + 24, chord[4] + 12, chord[2] + 12);
+      const step = 1.25 / 4;
+      const nSteps = Math.floor((dur - 3) / step);
+      for (let i = 0; i < nSteps; i++) {
+        const env = 0.5 + 0.5 * Math.sin((i / nSteps) * Math.PI);
+        this.pluck(pat[i % pat.length], t + i * step, (section === 2 ? 0.026 : 0.016) * env * (i % 4 === 0 ? 1.25 : 1));
+      }
+    }
+  }
+
+  bell(midi, t, vel) {
+    const ctx = this.ctx, f = mtof(midi);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vel, t + 0.01);
+    g.gain.setTargetAtTime(0, t + 0.02, 1.1);
+    g.connect(this.organBus);
+    for (const [mult, amp] of [[1, 1], [2.76, 0.35], [5.4, 0.12], [8.93, 0.05]]) {
+      if (f * mult > 12000) continue;
+      const o = ctx.createOscillator();
+      o.type = 'sine'; o.frequency.value = f * mult;
+      const og = ctx.createGain(); og.gain.value = amp;
+      o.connect(og).connect(g);
+      o.start(t); o.stop(t + 6);
+    }
+  }
+
+  tick(t, vol) {
+    const ctx = this.ctx;
+    const s = ctx.createBufferSource(); s.buffer = this.whiteBuf;
+    const hp = ctx.createBiquadFilter(); hp.type = 'bandpass'; hp.frequency.value = 3200; hp.Q.value = 2;
+    const g = ctx.createGain(); g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
+    s.connect(hp).connect(g).connect(this.musicBus);
+    s.start(t, Math.random()); s.stop(t + 0.05);
   }
 
   organNote(midi, t, dur, vel, cutoff) {
@@ -194,16 +327,6 @@ export class AudioEngine {
       setTimeout(groan, 35000 + Math.random() * 50000);
     };
     setTimeout(groan, 20000);
-    // tique-taque opcional
-    this.tickTimer = setInterval(() => {
-      if (!this.ticking || !this.ctx) return;
-      const t = ctx.currentTime + 0.02;
-      const s = ctx.createBufferSource(); s.buffer = this.whiteBuf;
-      const hp = ctx.createBiquadFilter(); hp.type = 'bandpass'; hp.frequency.value = 3200; hp.Q.value = 2;
-      const g = ctx.createGain(); g.gain.setValueAtTime(0.05, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
-      s.connect(hp).connect(g).connect(this.musicBus);
-      s.start(t, Math.random()); s.stop(t + 0.05);
-    }, 1250);
   }
 
   // ---------------------------------------------------------------- motor
@@ -338,6 +461,28 @@ export class AudioEngine {
     this.atmWind.g.gain.setTargetAtTime(Math.min(level, 1) * 0.22, t, 0.4);
     this.atmWind.bp.frequency.setTargetAtTime(250 + level * 900, t, 0.5);
   }
+  // rugido da reentrada: ronco grave + chiado do plasma, nível 0..1
+  setReentry(level) {
+    if (!this.ctx) return;
+    if (!this.roar) {
+      if (level <= 0) return;
+      const ctx = this.ctx;
+      const n = this.noiseSrc(this.noiseBuf), w = this.noiseSrc(this.whiteBuf);
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 200;
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1400; bp.Q.value = 0.7;
+      const g = ctx.createGain(), g2 = ctx.createGain(); g.gain.value = 0; g2.gain.value = 0;
+      n.connect(lp).connect(g).connect(this.sfxBus);
+      w.connect(bp).connect(g2).connect(this.sfxBus);
+      n.start(); w.start();
+      this.roar = { lp, g, g2 };
+    }
+    const t = this.ctx.currentTime;
+    this.roar.g.gain.setTargetAtTime(level * 0.55, t, 0.25);
+    this.roar.g2.gain.setTargetAtTime(level * 0.09, t, 0.25);
+    this.roar.lp.frequency.setTargetAtTime(160 + level * 520, t, 0.3);
+  }
+  // alerta de proximidade do solo
+  gpws() { this.tone(1046, 0.11, 0.05, 'square', 0, false); this.tone(1046, 0.11, 0.05, 'square', 0.17, false); }
   thud(strength = 1) {
     if (!this.ctx) return;
     this.tone(60, 0.6, 0.25 * strength, 'sine', 0, true, 30);

@@ -402,8 +402,15 @@ uniform float uOcean;
 uniform mat3 uNM; // rotação planeta -> câmera
 uniform vec3 uSunView, uSunCol, uFogCol, uSkyCol;
 uniform float uSunI, uFogK, uDay, uTime, uDebug;
+uniform vec3 uLampPos, uLampDir; uniform float uLampI, uLampR; // faróis de pouso da nave (espaço da câmera)
 varying vec2 vUv; varying vec3 vDir; varying vec3 vMV; varying vec3 vPl;
 ${NOISE}
+vec3 lamp(vec3 N){
+  if (uLampI <= 0.0) return vec3(0.0);
+  vec3 toL = uLampPos - vMV; float d = length(toL); vec3 Ld = toL / d;
+  float cone = smoothstep(0.78, 0.93, dot(-Ld, uLampDir));
+  return vec3(1.0, 0.93, 0.8) * (uLampI * cone / (1.0 + d * d / (uLampR * uLampR))) * max(dot(N, Ld), 0.0);
+}
 void main(){
   vec4 alb = texture2D(tAlb, vUv);
   alb.rgb *= alb.rgb;
@@ -424,12 +431,12 @@ void main(){
     vec3 H = normalize(L + V);
     float spec = pow(max(dot(Nw, H), 0.0), 400.0) * 6.0;
     vec3 body = alb.rgb * (ndl * 0.8 + 0.2) * horizon;
-    col = mix(body * uSunI * 0.78, uSkyCol * uDay, fres) + uSunCol * spec * uSunI * horizon;
+    col = mix(body * uSunI * 0.78, uSkyCol * uDay, fres) + uSunCol * spec * uSunI * horizon + alb.rgb * lamp(Nw);
   } else {
     vec3 N = normalize(uNM * (nt.rgb * 2.0 - 1.0));
     float diff = max(dot(N, L), 0.0) * horizon;
     vec3 amb = uSkyCol * uDay * (0.25 + 0.25 * dot(N, up)) + vec3(0.004);
-    col = alb.rgb * (diff * uSunCol * uSunI * 0.95 + amb);
+    col = alb.rgb * (diff * uSunCol * uSunI * 0.95 + amb + lamp(N));
     col += vec3(1.0, 0.35, 0.08) * pow(alb.a, 2.0) * 2.0 + vec3(0.9, 0.18, 0.02) * alb.a * 0.8;
   }
   float dist = length(vMV);
@@ -574,6 +581,7 @@ export class PlanetSurface {
         uSunView: { value: new THREE.Vector3(0, 1, 0) }, uSunCol: { value: new THREE.Color(1, 1, 1) }, uSunI: { value: 1 },
         uFogCol: { value: new THREE.Color(0, 0, 0) }, uSkyCol: { value: new THREE.Color(0, 0, 0) }, uFogK: { value: 0 }, uDay: { value: 0 }, uTime: { value: 0 },
         uNM: { value: new THREE.Matrix3() }, uDebug: { value: 0 },
+        uLampPos: { value: new THREE.Vector3() }, uLampDir: { value: new THREE.Vector3(0, -1, 0) }, uLampI: { value: 0 }, uLampR: { value: 0.12 },
       },
       side: THREE.DoubleSide,
     });
@@ -792,6 +800,8 @@ export class PlanetSurface {
     u.uNM.value.setFromMatrix4(this._m);
     u.uSunView.value.copy(env.sunView); u.uSunCol.value.copy(env.sunCol); u.uSunI.value = env.sunI;
     u.uFogCol.value.copy(env.fogCol); u.uSkyCol.value.copy(env.skyCol); u.uFogK.value = env.fogK; u.uDay.value = env.day; u.uTime.value = env.time;
+    if (env.lamp) { u.uLampPos.value.copy(env.lamp.pos); u.uLampDir.value.copy(env.lamp.dir); u.uLampI.value = env.lamp.i; u.uLampR.value = env.lamp.r; }
+    else u.uLampI.value = 0;
     if (this.clouds) {
       const cu = this.clouds.material.uniforms;
       cu.uSunPos.value.copy(env.sunWorld); cu.uSunCol.value.copy(env.sunCol); cu.uSunI.value = env.sunI;

@@ -18,6 +18,7 @@ import { UI, $, remarkFor } from './ui.js';
 import { missionStatus } from './missions.js';
 import { Fleet, FleetView, ShadowEncounter, exoCatalog, FLEET } from './fleet.js';
 import { INTRO, storyTick, TUPA_LOG, EPILOGUE } from './story.js';
+import { FlightFX } from './flightfx.js';
 import { KM_PER_LY, KM_PER_AU, C_KMS, clamp, smoothstep, fmtDist, fmtSpeed, fmtTime, fmtNum } from './util.js';
 
 const SAVE_KEY = 'ultimoHorizonte.save.v1';
@@ -54,7 +55,8 @@ const sun = new THREE.DirectionalLight(0xffffff, 2.5);
 scene.add(sun, sun.target);
 const ambient = new THREE.AmbientLight(0x30405a, 0.35);
 scene.add(ambient);
-// A nave é desenhada numa camada própria, depois da lente gravitacional, para não ser distorcida
+// A nave é desenhada numa camada própria, depois da lente gravitacional, para não ser distorcida.
+// Sem a lente ela reaproveita a profundidade da cena e fica escondida atrás do relevo
 const SHIP_LAYER = 1;
 sun.layers.enable(SHIP_LAYER); ambient.layers.enable(SHIP_LAYER);
 const shipCam = new THREE.PerspectiveCamera();
@@ -63,7 +65,7 @@ const audio = new AudioEngine();
 audio.vol = { music: settings.music, sfx: settings.sfx, amb: settings.amb };
 audio.ticking = settings.tick;
 
-let galaxy, sky, map, composer, bloom, cine, preview, warpFx, lens, dust, fleet;
+let galaxy, sky, map, composer, bloom, cine, preview, warpFx, lens, dust, fleet, shipPass, fx;
 const jumpRange = () => S.shipDef.jump * (S.flags && S.flags.iaraSaved ? 1.3 : 1);
 
 // ------------------------------------------------------------------------------------------------
@@ -73,7 +75,7 @@ const S = {
   state: 'loading',
   shipDef: SHIPS[0], ship: null,
   anchor: 0, local: [0, 0, 0], quat: new THREE.Quaternion(),
-  throttle: 0, speed: 0, angVel: new THREE.Vector3(), knock: new THREE.Vector3(), bumpShake: 0,
+  throttle: 0, speed: 0, angVel: new THREE.Vector3(), knock: new THREE.Vector3(), bumpShake: 0, vrise: 0, liftT: 0, gw: 0,
   sysIndex: -1, view: null,
   target: null, autopilot: false, align: false, lastStep: 0,
   frame: null, surf: null, si: null, env: null, hull: 100, dmgT: 10, landed: null, autoland: false, vdesc: 0,
@@ -110,6 +112,7 @@ async function init() {
   setupComposer();
   setupWarpFx();
   setupDust();
+  fx = new FlightFX(scene, SHIP_LAYER);
   setupPreview();
   bindUI();
   // Sistema Solar como cenário da tela de título
@@ -138,7 +141,7 @@ function setupComposer() {
   lens = new ShaderPass(LensShader);
   lens.uniforms.tSky.value = sky.cubeRT.texture;
   lens.enabled = false;
-  const shipPass = new RenderPass(scene, shipCam);
+  shipPass = new RenderPass(scene, shipCam);
   shipPass.clear = false;
   shipPass.clearDepth = true;
   composer.addPass(skyPass);
@@ -616,7 +619,7 @@ function updatePrompts(dt) {
     L.push({ k: 'F', t: 'Coletar amostra' });
   } else if (S.landed) {
     if (!S.landed.water) L.push({ k: 'E', t: 'Desembarcar' });
-    L.push({ k: 'W', t: 'Decolar' });
+    L.push({ k: 'W', t: 'Decolar · [Espaço] subir na vertical' });
   } else if (!S.warp) {
     const it = interactable();
     if (it) L.push({ k: 'R', t: it.label, hold: true });
@@ -626,6 +629,7 @@ function updatePrompts(dt) {
       if (ti.dist > scanRange(ti.it.body)) L.push({ k: 'G', t: `Voar até ${ti.name}` });
       else if (ti.it.body.scannedScore == null) L.push({ k: 'F', t: `Escanear ${ti.name}` });
     } else if (ti && ti.fleet && !it) L.push({ k: 'G', t: `Voar até ${ti.name}` });
+    if (S.gw > 0.5 && S.vrise < -0.004 && !S.autoland) L.push({ k: 'Espaço', t: 'Propulsores verticais (subir)' });
     if (S.surf && S.si && S.si.b.body === 'rocky' && S.si.alt < 80) L.push({ k: 'P', t: 'Pouso automático' });
     if (!ti && mission && mission.wp) L.push({ k: 'T', t: 'Marcar objetivo como destino' });
   }
@@ -793,12 +797,23 @@ function steerToward(dirWorld) {
   return { yaw: clamp(yaw, -1, 1), pitch: clamp(pitch, -1, 1), align: -d.z };
 }
 
+// Perto de um planeta a nave voa "como na Terra": há um em cima e um embaixo, ela nivela as asas com o
+// horizonte, a guinada gira em torno da vertical local e, com os motores em baixa, a gravidade a puxa para baixo
+function gravityWeight() {
+  const si = S.si;
+  if (!si || S.mode !== 'ship' || S.landed) return 0;
+  const R = si.b.radius;
+  return 1 - smoothstep(R * 0.1, R * 0.35, si.alt);
+}
+function surfGravity(b) { return b.gravity || b.mass / Math.pow(b.radius / 6371, 2); }
+const _gv = new THREE.Vector3(), _gv2 = new THREE.Vector3();
+
 function flight(dt) {
   const def = S.shipDef;
   if (S.landed) {
-    // pousado: [W] / propulsão decola
-    S.speed = 0; S.angVel.set(0, 0, 0); S.knock.set(0, 0, 0);
-    if (keys.KeyW || S.throttle > 0.05) takeoff();
+    // pousado: [W] / [Espaço] / propulsão decola
+    S.speed = 0; S.angVel.set(0, 0, 0); S.knock.set(0, 0, 0); S.vrise = 0; S.gw = 0;
+    if (keys.KeyW || keys.Space || S.throttle > 0.05) takeoff();
     return;
   }
   let yaw = 0, pitch = 0, roll = 0;
@@ -860,12 +875,34 @@ function flight(dt) {
     }
   }
 
+  const gw = (S.gw = gravityWeight());
+  const upW = gw > 0 ? upWorld() : null;
+  let level = 0;
+  if (upW) {
+    const fwd = _v.set(0, 0, -1).applyQuaternion(S.quat);
+    level = gw * (1 - smoothstep(0.85, 0.97, Math.abs(fwd.dot(upW)))); // apontando para o céu/chão não há "asas"
+    if (!S.flags.gravTip && gw > 0.5 && S.state === 'play') {
+      S.flags.gravTip = true;
+      UI.msg(`Gravidade de ${S.si.b.name}: ${fmtNum(surfGravity(S.si.b), 2)} g. Agora há um em cima e um embaixo — a nave se nivela com o horizonte. Com os motores em baixa ela desce; [Espaço] liga os propulsores verticais.`);
+    }
+    // sem [Q]/[E] as asas voltam ao nível do horizonte; nas curvas a nave inclina para dentro
+    if (!keys.KeyQ && !keys.KeyE && !S.autoland && level > 0) {
+      const right = _gv.set(1, 0, 0).applyQuaternion(S.quat), up = _gv2.set(0, 1, 0).applyQuaternion(S.quat);
+      const err = Math.atan2(right.dot(upW), up.dot(upW)) - yaw * 0.5;
+      roll = clamp(-err * 2.5, -1, 1) * level;
+    }
+  }
+
   const turn = def.turn;
   if (S.autoland) { yaw = 0; pitch = 0; roll = 0; }
   const tgt = _v.set(pitch * turn, yaw * turn, roll * turn * 1.4);
   S.angVel.lerp(tgt, 1 - Math.exp(-dt * (2 + turn * 2.5)));
-  _q.setFromEuler(_e.set(S.angVel.x * dt, S.angVel.y * dt, S.angVel.z * dt, 'XYZ'));
-  S.quat.multiply(_q).normalize();
+  // perto de um planeta a guinada gira em torno da vertical local (curva de avião, horizonte fixo)
+  const yawW = upW ? S.angVel.y * level : 0;
+  _q.setFromEuler(_e.set(S.angVel.x * dt, (S.angVel.y - yawW) * dt, S.angVel.z * dt, 'XYZ'));
+  S.quat.multiply(_q);
+  if (yawW) S.quat.premultiply(_q.setFromAxisAngle(upW, yawW * dt));
+  S.quat.normalize();
   if (S.autoland) autoland(dt);
 
   if (!S.autopilot && !S.autoland && !(S.warp && S.warp.phase === 'charge')) {
@@ -896,6 +933,19 @@ function flight(dt) {
   if (S.knock.lengthSq() > 1e-14) {
     S.local[0] += S.knock.x * dt; S.local[1] += S.knock.y * dt; S.local[2] += S.knock.z * dt;
     S.knock.multiplyScalar(Math.exp(-dt * 0.8));
+  }
+  // gravidade: motores em baixa e devagar = a nave desce (até ~12 m/s a 1 g); [Espaço] = propulsores verticais
+  S.liftT = Math.max(0, S.liftT - dt);
+  if (upW && !S.autoland) {
+    const g = surfGravity(S.si.b);
+    const support = Math.max(smoothstep(0.02, 0.08, S.speed), smoothstep(0.05, 0.3, S.throttle));
+    const lift = keys.Space || S.liftT > 0;
+    const want = lift ? 0.045 : -0.012 * Math.sqrt(Math.max(g, 0.05)) * (1 - support) * gw;
+    S.vrise += (want - S.vrise) * (1 - Math.exp(-dt * (lift ? 1.2 : 0.3 + 0.35 * Math.max(g, 0.2))));
+  } else S.vrise *= Math.exp(-dt * 2);
+  if (upW && Math.abs(S.vrise) > 1e-7) {
+    const k = S.vrise * dt;
+    S.local[0] += upW.x * k; S.local[1] += upW.y * k; S.local[2] += upW.z * k;
   }
 }
 
@@ -933,16 +983,37 @@ function autoland(dt) {
   const step = S.vdesc * dt;
   S.local[0] -= upW.x * step; S.local[1] -= upW.y * step; S.local[2] -= upW.z * step;
 }
+// Chão mais alto sob o casco (centro, proa, popa e laterais), no referencial do planeta: em terreno
+// acidentado a nave apoia nos pontos altos em vez de afundar o nariz ou as asas no relevo
+const _hg = new THREE.Vector3(), _hg2 = new THREE.Vector3(), _hg3 = new THREE.Vector3();
+const HULL_PTS = [[0, 0], [0.42, 0], [-0.42, 0], [0, 0.22], [0, -0.22], [0.25, 0.15], [0.25, -0.15], [-0.25, 0.15], [-0.25, -0.15]];
+function hullGround(dir, b) {
+  const L = S.ship.length;
+  const fwd = _hg.set(0, 0, -1).applyQuaternion(S.quat).applyQuaternion(_fq.copy(planetQuat(b)).invert());
+  fwd.addScaledVector(dir, -fwd.dot(dir));
+  if (fwd.lengthSq() < 1e-10) fwd.set(1, 0, 0).addScaledVector(dir, -dir.x);
+  fwd.normalize();
+  const right = _hg2.crossVectors(fwd, dir);
+  let ground = -Infinity, water = false;
+  for (const [a, c] of HULL_PTS) {
+    const p = _hg3.copy(dir).multiplyScalar(b.radius).addScaledVector(fwd, a * L).addScaledVector(right, c * L).normalize();
+    const h = heightAt(S.surf.P, p.x, p.y, p.z);
+    if (a === 0 && c === 0) water = h.water;
+    ground = Math.max(ground, b.radius + (h.water ? 0 : h.e));
+  }
+  return { ground, water };
+}
 function groundContact() {
   if (!S.surf || !S.frame || !S.frame.rot || S.landed || S.mode !== 'ship' || S.state !== 'play') return;
   const f = S.frame, b = S.surf.item.body;
   const r = Math.hypot(f.rel[0], f.rel[1], f.rel[2]);
   const dir = new THREE.Vector3(f.rel[0] / r, f.rel[1] / r, f.rel[2] / r);
-  const h = heightAt(S.surf.P, dir.x, dir.y, dir.z);
-  const ground = b.radius + (h.water ? 0 : h.e);
+  if (S.si && S.si.alt > 1) return; // bem acima do chão: dispensa as amostras
+  const h = hullGround(dir, b);
+  const ground = h.ground;
   const half = shipHalf();
   if (r - ground - half >= 0) return;
-  const impact = Math.max(S.speed, S.vdesc) * 1000; // m/s
+  const impact = Math.max(S.speed, S.vdesc, -S.vrise) * 1000; // m/s
   if (impact < 45) { land(dir, ground, h.water); return; }
   if (impact > 160) { destroyShip(`Colisão com ${h.water ? 'o oceano' : 'o solo'} de ${b.name} a ${fmtNum(impact * 3.6, 0)} km/h.`); return; }
   damage((impact - 45) * 0.9);
@@ -963,7 +1034,7 @@ function land(dir, ground, water) {
   const q = lookQuat(fwd.normalize(), up);
   const pos = up.clone().multiplyScalar(ground + shipHalf() * (water ? 0.6 : 1));
   S.landed = { rel: [pos.x, pos.y, pos.z], q: q.toArray(), water, body: b.id };
-  S.autoland = false; S.vdesc = 0; S.speed = 0; S.throttle = 0; S.autopilot = false;
+  S.autoland = false; S.vdesc = 0; S.vrise = 0; S.speed = 0; S.throttle = 0; S.autopilot = false;
   audio.thud(1);
   const T = Math.round(b.temp - 273.15);
   UI.msg(water ? `Pousamos no oceano de ${b.name}. A nave flutua. [W] decola.`
@@ -982,6 +1053,7 @@ function takeoff() {
   S.quat.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.25));
   S.cam.quat.copy(S.quat);
   S.throttle = Math.max(S.throttle, 0.12);
+  S.vrise = 0.02; S.liftT = 2; // os propulsores verticais tiram a nave do chão
   UI.msg('Decolando.');
   audio.click();
 }
@@ -1222,6 +1294,30 @@ function sampleGround() {
   audio.scanDone();
 }
 
+// Faróis de pouso: acendem sozinhos no escuro perto do chão e iluminam o relevo, as pedras e a vegetação
+let lampI = 0;
+const lampLight = new THREE.SpotLight(0xffeedd, 0, 1, 0.6, 0.65, 0);
+scene.add(lampLight, lampLight.target);
+const _lp = new THREE.Vector3(), _ld = new THREE.Vector3(), _lu = new THREE.Vector3();
+function landingLamp(dt, it) {
+  const ship = S.ship && S.ship.group;
+  const near = !!ship && S.state !== 'destroyed' && (S.landed || (S.mode === 'ship' && S.si && S.si.alt < 0.8));
+  let want = 0;
+  if (near) {
+    _lu.copy(ship.position).sub(it.world).normalize();
+    const elev = _ld.copy(S.view.items[0].world).sub(ship.position).normalize().dot(_lu);
+    want = 1 - smoothstep(-0.08, 0.12, elev);
+  }
+  lampI += (want - lampI) * (1 - Math.exp(-dt * 3));
+  if (lampI < 0.01) { lampLight.intensity = 0; return null; }
+  const L = S.ship.length, r = Math.max(0.12, L * 6);
+  const pos = _lp.set(0, -L * 0.12, -L * 0.45).applyQuaternion(ship.quaternion).add(ship.position);
+  const dir = _ld.set(0, -0.75, -1).normalize().applyQuaternion(ship.quaternion);
+  lampLight.position.copy(pos); lampLight.target.position.copy(pos).add(dir);
+  lampLight.intensity = lampI * 3; lampLight.distance = r * 4;
+  return { pos: pos.clone().applyMatrix4(camera.matrixWorldInverse), dir: dir.clone().transformDirection(camera.matrixWorldInverse), i: lampI * 2.2, r };
+}
+
 // Ambiente visual da superfície: céu, névoa, luz do dia
 const _ev = new THREE.Vector3(), _ev2 = new THREE.Vector3();
 function surfaceVisuals(dt) {
@@ -1256,6 +1352,7 @@ function surfaceVisuals(dt) {
     };
     it.group.updateMatrixWorld(true);
     const camPl = it.spin.worldToLocal(camera.position.clone());
+    env.lamp = landingLamp(dt, it);
     S.surf.surface.update(camPl, camera, env);
     daylight = day * clamp(rho * 4, 0, 1);
     ambient.color.setRGB(0.19, 0.25, 0.35).lerp(sky, Math.min(1, daylight));
@@ -1280,8 +1377,37 @@ function surfaceVisuals(dt) {
   } else {
     ambient.color.setRGB(0.19, 0.25, 0.35);
     audio.setWind(0);
+    lampI = 0; lampLight.intensity = 0;
   }
   return daylight;
+}
+
+// Sombra no chão, poeira/respingos dos motores e o plasma da reentrada
+let reentry = 0;
+const _fxShip = new THREE.Vector3(), _fxRel = new THREE.Vector3(), _fxSun = new THREE.Vector3();
+function updateFlightFx(dt) {
+  const st = S.state;
+  const on = !!S.ship && S.view && (st === 'play' || st === 'ending' || st === 'pause') && !(S.warp && S.warp.phase === 'tunnel');
+  if (!on) { fx.hide(); reentry = 0; audio.setReentry(0); return; }
+  if (st === 'pause') dt = 0;
+  // reentrada: pressão dinâmica acima do que o limitador do ar permite (chegando rápido do espaço ou forçando com [Shift])
+  const rho = S.env && S.mode === 'ship' && !S.landed ? S.env.rho : 0;
+  const want = rho > 1e-5 ? smoothstep(0.34, 1.1, S.speed * Math.sqrt(rho)) : 0;
+  reentry += (want - reentry) * (1 - Math.exp(-dt * (want > reentry ? 3 : 1.2)));
+  if (reentry < 0.003) reentry = 0;
+  audio.setReentry(reentry);
+  const surf = S.surf && S.frame && S.frame.rot ? S.surf : null;
+  const b = surf ? surf.item.body : null;
+  const power = S.landed || S.mode !== 'ship' ? 0 : Math.max(S.throttle, S.autoland ? 0.5 : 0, S.vrise > 0.004 ? 1 : 0);
+  fx.update(dt, {
+    surf: surf && b.body === 'rocky' ? { P: surf.P, b } : null,
+    q: b ? planetQuat(b).clone() : null,
+    frameRel: _fxRel.set(...S.frame ? S.frame.rel : [0, 0, 0]),
+    ship: _fxShip.set(...(S.landed ? S.landed.rel : S.frame ? S.frame.rel : [0, 0, 0])),
+    shipQuat: S.ship.group.quaternion, shipScene: S.ship.group.position, L: S.ship.length,
+    sunScene: _fxSun.copy(S.view.items[0].world).sub(S.ship.group.position).normalize(),
+    power, lift: S.mode === 'ship' && S.gw > 0 && (keys.Space || S.liftT > 0), heat: reentry, time: elapsed, camera, H,
+  });
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1351,7 +1477,7 @@ function updateWarp(dt) {
 function arrive() {
   const w = S.warp;
   const i = w.target;
-  S.speed = 0; S.throttle = 0; S.knock.set(0, 0, 0);
+  S.speed = 0; S.throttle = 0; S.knock.set(0, 0, 0); S.vrise = 0;
   S.stats.jumps++;
   S.warp = null;
   warpFx.level = 0;
@@ -1477,11 +1603,18 @@ function updateScan(dt) {
 // ------------------------------------------------------------------------------------------------
 // Câmera
 // ------------------------------------------------------------------------------------------------
-const _look = new THREE.Quaternion(), _tilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.07);
+let speedFov = 0;
+const _look = new THREE.Quaternion(), _tilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.07), _cq = new THREE.Quaternion();
 function updateCamera(dt) {
   const L = S.ship.length;
   const cockpit = S.cam.mode === 'cockpit';
-  S.cam.quat.slerp(S.quat, 1 - Math.exp(-dt * (cockpit ? 40 : 4.5)));
+  let want = S.quat;
+  // perto de um planeta a câmera externa acompanha a nave mas mantém o horizonte quase reto
+  if (!cockpit && S.gw > 0) {
+    const f = _v.set(0, 0, -1).applyQuaternion(S.quat), up = upWorld();
+    if (Math.abs(f.dot(up)) < 0.97) want = _cq.copy(S.quat).slerp(lookQuat(f, up), S.gw * 0.7);
+  }
+  S.cam.quat.slerp(want, 1 - Math.exp(-dt * (cockpit ? 40 : 4.5)));
   _look.setFromEuler(_e.set(S.cam.pitch, S.cam.yaw, 0, 'YXZ'));
   if (S.cam.intro) {
     S.cam.zoom += (1 - S.cam.zoom) * (1 - Math.exp(-dt * 0.35));
@@ -1496,22 +1629,37 @@ function updateCamera(dt) {
     camera.quaternion.copy(S.cam.quat).multiply(_look).multiply(_tilt);
   }
   S.ship.group.visible = !cockpit && S.state !== 'destroyed';
-  // a câmera externa não entra no chão
-  if (!cockpit && S.surf && S.frame && S.frame.rot) {
+  // a câmera externa não entra no chão e sobe se um morro ficar entre ela e a nave
+  if (!cockpit && S.surf && S.frame && S.frame.rot && S.si && S.si.alt < 3) {
     const b = S.surf.item.body;
-    const q = planetQuat(b);
-    const cp = camera.position.clone().applyQuaternion(q.clone().invert()).add(_fv.set(...S.frame.rel));
-    const r = cp.length(), d = cp.clone().divideScalar(r);
-    const h = heightAt(S.surf.P, d.x, d.y, d.z);
-    const gmin = b.radius + (h.water ? 0 : h.e) + 0.0015;
-    if (r < gmin) camera.position.addScaledVector(d.applyQuaternion(q), gmin - r);
+    const q = planetQuat(b), qi = q.clone().invert();
+    const ship = _fv.set(...S.frame.rel);
+    const cp = camera.position.clone().applyQuaternion(qi).add(ship);
+    const up = cp.clone().normalize();
+    let lift = 0;
+    for (const k of [1, 0.75, 0.5, 0.3]) {
+      const p = ship.clone().lerp(cp, k), r = p.length(), d = p.divideScalar(r);
+      const h = heightAt(S.surf.P, d.x, d.y, d.z);
+      const deficit = b.radius + (h.water ? 0 : h.e) + 0.0015 - r;
+      if (deficit > 0) lift = Math.max(lift, deficit / k);
+    }
+    if (lift > 0) camera.position.addScaledVector(up.applyQuaternion(q), lift);
   }
   if (!cockpit) cameraOutsideFleet();
   let shake = S.bumpShake;
   S.bumpShake *= Math.exp(-dt * 4);
   if (S.warp) shake = Math.max(shake, S.warp.phase === 'charge' ? (S.warp.t / S.warp.dur) * 0.5 : 0.25 * warpFx.level);
   if (shake > 0) camera.position.add(_v.set((Math.random() - 0.5), (Math.random() - 0.5), (Math.random() - 0.5)).multiplyScalar(L * 0.02 * shake));
-  const fov = settings.fov + warpFx.level * 32 + (S.warp && S.warp.phase === 'charge' ? -4 * (S.warp.t / S.warp.dur) : 0);
+  // o ar sacode a câmera (turbulência e plasma da reentrada) e o campo de visão abre um pouco com a velocidade
+  const rho = S.env && S.mode === 'ship' && !S.landed ? Math.min(S.env.rho, 1.5) : 0;
+  const turb = rho * smoothstep(0.03, 0.4, S.speed) * 0.35 + reentry * 1.2;
+  if (turb > 0.005) {
+    const t = elapsed;
+    camera.position.add(_v.set(Math.sin(t * 13.1) + 0.5 * Math.sin(t * 23.7), Math.sin(t * 11.3 + 1) + 0.5 * Math.sin(t * 19.1), 0).applyQuaternion(camera.quaternion).multiplyScalar(L * 0.006 * turb));
+  }
+  const fovWant = S.landed ? 0 : 6 * smoothstep(2.3, 4.6, Math.log10(1 + S.speed * 1000));
+  speedFov += (fovWant - speedFov) * (1 - Math.exp(-dt * 1.5));
+  const fov = settings.fov + speedFov + warpFx.level * 32 + (S.warp && S.warp.phase === 'charge' ? -4 * (S.warp.t / S.warp.dur) : 0);
   if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }
 }
 
@@ -1594,6 +1742,7 @@ function updateHUD(dt) {
   if (hazardTxt) UI.setText('hazard', '⚠ ' + hazardTxt);
   $('h-ap').classList.toggle('hidden', !S.autopilot);
   UI.steer(W / 2, H / 2, mouse.x, mouse.y, mouse.steer && S.state === 'play');
+  updateHorizon(dt);
 
   // marcador do alvo
   const ti = targetInfo();
@@ -1712,6 +1861,35 @@ function updateHUD(dt) {
   updateApproach(dt);
   updateMission(dt);
   updatePrompts(dt);
+}
+
+// Linha do horizonte (na tela) e altímetro com velocidade vertical, perto de um planeta
+const _hv = new THREE.Vector3();
+let hzAlt = null, hzVs = 0, gpwsT = 0;
+function updateHorizon(dt) {
+  const show = S.gw > 0.05 && S.mode === 'ship' && !S.landed && !S.warp && !!S.si;
+  $('horizon').classList.toggle('hidden', !show);
+  if (!show) { hzAlt = null; $('gpws').classList.add('hidden'); return; }
+  // vertical local no espaço da câmera; o horizonte é a reta da tela perpendicular a ela
+  const u = _hv.copy(upWorld()).applyQuaternion(_q.copy(camera.quaternion).invert());
+  const s = H / 2 / Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+  const q2 = u.x * u.x + u.y * u.y;
+  let ox = 0, oy = 0;
+  if (q2 > 1e-6) { ox = (s * u.z * u.x) / q2; oy = (-s * u.z * u.y) / q2; }
+  const m = Math.hypot(ox, oy), lim = H * 0.32;
+  if (m > lim) { ox *= lim / m; oy *= lim / m; }
+  $('hz-line').style.transform = `translate(${W / 2 + ox}px, ${H / 2 + oy}px) rotate(${Math.atan2(u.x, u.y)}rad)`;
+  const alt = S.si.alt - shipHalf();
+  if (hzAlt != null && dt > 0) hzVs += ((alt - hzAlt) / dt - hzVs) * (1 - Math.exp(-dt * 3));
+  hzAlt = alt;
+  const vs = hzVs * 1000, altM = Math.max(alt, 0) * 1000;
+  UI.setText('hz-alt', altM < 10000 ? `${fmtNum(altM, 0)} m` : fmtDist(alt));
+  UI.setText('hz-vs', Math.abs(vs) < 0.5 ? 'nível' : `${vs > 0 ? '▲ subindo' : '▼ descendo'} ${fmtNum(Math.abs(vs), Math.abs(vs) < 10 ? 1 : 0)} m/s`);
+  $('hz-box').className = vs < -30 && altM < 1500 ? 'hz-danger' : vs < -12 && altM < 600 ? 'hz-warn' : '';
+  // alerta de proximidade do solo: descendo rápido e a menos de ~7 s do impacto
+  const gp = !S.autoland && altM < 1500 && vs < -25 && altM / -vs < 7 && S.si.b.body === 'rocky';
+  $('gpws').classList.toggle('hidden', !gp);
+  if (gp) { gpwsT -= dt; if (gpwsT <= 0) { gpwsT = 0.75; audio.gpws(); } } else gpwsT = 0;
 }
 
 // Painel de aproximação: folga até o casco e velocidade de aproximação da nave da frota mais próxima
@@ -2011,7 +2189,7 @@ async function startGame(def, fromSave = false) {
   cine.uniforms.uFog.value = 0; cine.uniforms.uHeat.value = 0; cine.uniforms.uFlashC.value.set(0.8, 0.9, 1.0);
   S.ship.group.visible = true;
   $('destroyed').classList.add('hidden');
-  S.target = null; S.autopilot = false; S.align = false; S.speed = 0; S.throttle = 0; S.warp = null; S.scan = null; S.knock.set(0, 0, 0);
+  S.target = null; S.autopilot = false; S.align = false; S.speed = 0; S.throttle = 0; S.warp = null; S.scan = null; S.knock.set(0, 0, 0); S.vrise = 0; S.liftT = 0;
   if (!fromSave) S.target = { kind: 'body', id: '0:Terra' };
   mission = null;
   S.cam.mode = 'chase'; S.cam.yaw = 0; S.cam.pitch = 0; S.cam.zoom = fromSave ? 1 : 5; S.cam.intro = !fromSave;
@@ -2384,13 +2562,18 @@ function loop(now) {
 
   if (st === 'pause' && S.ship) updateCamera(0);
 
+  audio.setMood(st === 'title' || st === 'intro' || st === 'select' || st === 'loading' ? 'title'
+    : S.shadow || hazardTxt ? 'tension' : !S.view || S.warp ? 'deep' : 'explore');
   if (S.view) { S.view.showOrbits = S.showOrbits && !S.si; S.view.update(S.t, S.local, camera, H); }
   if (S.fv) S.fv.update(dt, S.t, S.local, elapsed);
   updateLighting();
   const daylight = surfaceVisuals(dt);
+  updateFlightFx(dt);
   updateDust(dt);
   updateLens();
   syncShipCam();
+  // a lente troca o alvo de render: aí a profundidade da cena se perde e precisa ser limpa
+  shipPass.clearDepth = lens.enabled;
   sky.update(camera, shipGal(), S.view ? S.sysIndex : -1, daylight);
   // efeitos de dobra
   warpFx.grp.visible = warpFx.level > 0.001;
