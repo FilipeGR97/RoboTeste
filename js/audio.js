@@ -73,10 +73,13 @@ export class AudioEngine {
     this.ambBus = ctx.createGain(); this.ambBus.gain.value = this.vol.amb;
     this.sfxBus = ctx.createGain(); this.sfxBus.gain.value = this.vol.sfx;
     this.musicBus.connect(this.master); this.ambBus.connect(this.master); this.sfxBus.connect(this.master);
+    // o eco de cada categoria passa pelo próprio volume: com o controle no zero, nem o eco toca
+    this.rev = {};
+    for (const k of ['music', 'sfx', 'amb']) { const g = ctx.createGain(); g.gain.value = this.vol[k]; g.connect(this.reverb); this.rev[k] = g; }
     this.organBus = ctx.createGain(); this.organBus.gain.value = 1;
     this.organBus.connect(this.musicBus);
     this.musicRev = ctx.createGain(); this.musicRev.gain.value = 0.9;
-    this.organBus.connect(this.musicRev).connect(this.reverb);
+    this.organBus.connect(this.musicRev).connect(this.rev.music);
     this.noiseBuf = this.makeNoise(4, 'brown');
     this.whiteBuf = this.makeNoise(2, 'white');
     this.startAmbience();
@@ -306,7 +309,7 @@ export class AudioEngine {
     const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 500; bp.Q.value = 7;
     const wg = ctx.createGain(); wg.gain.value = 0.018;
     wind.connect(bp).connect(wg);
-    wg.connect(this.ambBus); wg.connect(this.reverb);
+    wg.connect(this.ambBus); wg.connect(this.rev.amb);
     wind.start();
     const l2 = ctx.createOscillator(); l2.frequency.value = 0.031;
     const l2g = ctx.createGain(); l2g.gain.value = 320;
@@ -322,7 +325,7 @@ export class AudioEngine {
       const g = ctx.createGain();
       g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.05, t + 2); g.gain.linearRampToValueAtTime(0, t + 7);
       const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = f0 * 3; f.Q.value = 3;
-      o.connect(f).connect(g); g.connect(this.reverb); g.connect(this.ambBus);
+      o.connect(f).connect(g); g.connect(this.rev.amb); g.connect(this.ambBus);
       o.start(t); o.stop(t + 8);
       setTimeout(groan, 35000 + Math.random() * 50000);
     };
@@ -368,7 +371,7 @@ export class AudioEngine {
     const g = ctx.createGain();
     g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     o.connect(g).connect(this.sfxBus);
-    if (toReverb) { const rg = ctx.createGain(); rg.gain.value = 0.4; g.connect(rg).connect(this.reverb); }
+    if (toReverb) { const rg = ctx.createGain(); rg.gain.value = 0.4; g.connect(rg).connect(this.rev.sfx); }
     o.start(t); o.stop(t + dur + 0.05);
   }
   click() { this.tone(1400, 0.06, 0.05); }
@@ -396,7 +399,7 @@ export class AudioEngine {
     const n = this.noiseSrc(this.whiteBuf);
     const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.setValueAtTime(3000, t); hp.frequency.exponentialRampToValueAtTime(600, t + dur);
     const ng = ctx.createGain(); ng.gain.setValueAtTime(0, t); ng.gain.linearRampToValueAtTime(0.05, t + dur);
-    n.connect(hp).connect(ng).connect(this.sfxBus); ng.connect(this.reverb);
+    n.connect(hp).connect(ng).connect(this.sfxBus); ng.connect(this.rev.sfx);
     o.start(t); trem.start(t); n.start(t);
     const stop = (fade = 0.2) => {
       const tt = ctx.currentTime;
@@ -413,7 +416,7 @@ export class AudioEngine {
     const o = ctx.createOscillator(); o.type = 'sine';
     o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(28, t + 2.5);
     const g = ctx.createGain(); g.gain.setValueAtTime(0.5, t); g.gain.exponentialRampToValueAtTime(0.001, t + 3);
-    o.connect(g).connect(this.sfxBus); g.connect(this.reverb);
+    o.connect(g).connect(this.sfxBus); g.connect(this.rev.sfx);
     o.start(t); o.stop(t + 3.2);
     const n = this.noiseSrc(this.noiseBuf);
     const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 500;
@@ -427,7 +430,7 @@ export class AudioEngine {
     const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 1.5;
     bp.frequency.setValueAtTime(300, t); bp.frequency.exponentialRampToValueAtTime(4000, t + 1.2);
     const wg = ctx.createGain(); wg.gain.setValueAtTime(0.2, t); wg.gain.exponentialRampToValueAtTime(0.001, t + 1.6);
-    w.connect(bp).connect(wg).connect(this.sfxBus); wg.connect(this.reverb);
+    w.connect(bp).connect(wg).connect(this.sfxBus); wg.connect(this.rev.sfx);
     w.start(t); w.stop(t + 1.8);
   }
 
@@ -438,7 +441,7 @@ export class AudioEngine {
     const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 1;
     bp.frequency.setValueAtTime(5000, t); bp.frequency.exponentialRampToValueAtTime(200, t + 1.5);
     const g = ctx.createGain(); g.gain.setValueAtTime(0.25, t); g.gain.exponentialRampToValueAtTime(0.001, t + 2);
-    w.connect(bp).connect(g).connect(this.sfxBus); g.connect(this.reverb);
+    w.connect(bp).connect(g).connect(this.sfxBus); g.connect(this.rev.sfx);
     w.start(t); w.stop(t + 2.2);
     this.tone(55, 3, 0.3, 'sine', 0, true, 40);
   }
@@ -520,7 +523,7 @@ export class AudioEngine {
     const n = this.noiseSrc(this.noiseBuf);
     const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.setValueAtTime(2500, t); lp.frequency.exponentialRampToValueAtTime(60, t + 4);
     const g = ctx.createGain(); g.gain.setValueAtTime(0.9, t); g.gain.exponentialRampToValueAtTime(0.001, t + 5);
-    n.connect(lp).connect(g).connect(this.sfxBus); g.connect(this.reverb);
+    n.connect(lp).connect(g).connect(this.sfxBus); g.connect(this.rev.sfx);
     n.start(t); n.stop(t + 5.2);
     this.tone(45, 4, 0.5, 'sine', 0, true, 20);
     this.duck(true);
@@ -561,11 +564,16 @@ export class AudioEngine {
     this.vol[kind] = v;
     if (!this.ctx) return;
     const bus = { music: this.musicBus, sfx: this.sfxBus, amb: this.ambBus }[kind];
-    bus.gain.setTargetAtTime(v, this.ctx.currentTime, 0.1);
+    const g = kind === 'music' && this.ducked ? v * 0.35 : v;
+    bus.gain.setTargetAtTime(g, this.ctx.currentTime, 0.1);
+    this.rev[kind].gain.setTargetAtTime(g, this.ctx.currentTime, 0.1);
   }
 
   duck(on) {
+    this.ducked = on;
     if (!this.ctx) return;
-    this.musicBus.gain.setTargetAtTime(on ? this.vol.music * 0.35 : this.vol.music, this.ctx.currentTime, 0.8);
+    const g = on ? this.vol.music * 0.35 : this.vol.music;
+    this.musicBus.gain.setTargetAtTime(g, this.ctx.currentTime, 0.8);
+    this.rev.music.gain.setTargetAtTime(g, this.ctx.currentTime, 0.8);
   }
 }

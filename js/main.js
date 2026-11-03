@@ -30,11 +30,20 @@ const T0 = 1.7e9;
 // ------------------------------------------------------------------------------------------------
 // Configurações
 // ------------------------------------------------------------------------------------------------
-const settings = Object.assign(
-  { music: 0.7, sfx: 0.8, amb: 0.6, fov: 62, quality: 0.85, exposure: 1.0, invert: false, tick: false, steer: 1, look: 1, fps: false },
-  JSON.parse(localStorage.getItem(SET_KEY) || '{}'),
-);
-const saveSettings = () => localStorage.setItem(SET_KEY, JSON.stringify(settings));
+const SET_DEF = { music: 0.7, sfx: 0.8, amb: 0.6, fov: 62, quality: 0.85, exposure: 1.0, invert: false, tick: false, steer: 1, look: 1, fps: false };
+const SET_RANGE = { music: [0, 1], sfx: [0, 1], amb: [0, 1], fov: [45, 90], quality: [0.6, 1.5], exposure: [0.5, 2], steer: [0.3, 2.5], look: [0.3, 2.5] };
+// ajustes salvos: um arquivo corrompido ou um valor fora da faixa volta ao padrão em vez de travar o jogo
+const settings = (() => {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(SET_KEY) || '{}') || {}; } catch (e) { /* ignora */ }
+  const out = { ...SET_DEF };
+  for (const k in SET_DEF) {
+    const v = saved[k];
+    if (typeof SET_DEF[k] === 'boolean') { if (typeof v === 'boolean') out[k] = v; } else if (Number.isFinite(v)) out[k] = Math.min(SET_RANGE[k][1], Math.max(SET_RANGE[k][0], v));
+  }
+  return out;
+})();
+const saveSettings = () => { try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch (e) { /* sem armazenamento */ } };
 
 // ------------------------------------------------------------------------------------------------
 // Renderização
@@ -2243,8 +2252,10 @@ function titleOptions(on) {
   $('btn-opt-back').classList.toggle('hidden', !on);
   $('pause-title').textContent = on ? 'AJUSTES' : 'PAUSA';
   $('title').classList.toggle('behind', on);
-  if (on) fillOptions(); else saveSettings();
+  if (on) fillOptions(); else { saveSettings(); blurUI(); }
 }
+// tira o foco de sliders e botões do menu: senão as setas, o A/D e o Espaço continuam mexendo neles durante o jogo
+function blurUI() { if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur(); }
 function pause(on) {
   if (on) {
     S.prevState = S.state;
@@ -2255,6 +2266,7 @@ function pause(on) {
     S.state = S.prevState || 'play';
     $('pause').classList.add('hidden');
     saveSettings();
+    blurUI();
   }
 }
 
@@ -2344,9 +2356,9 @@ function bindUI() {
       S.walker.yaw += e.movementX * k;
       S.walker.pitch = clamp(S.walker.pitch - e.movementY * k * inv, -1.45, 1.45);
     } else if (mouse.look && S.state === 'play') {
-      const k = 0.005 * settings.look;
+      const k = 0.005 * settings.look, inv = settings.invert ? -1 : 1;
       S.cam.yaw -= (e.clientX - mouse.lastX) * k;
-      S.cam.pitch = clamp(S.cam.pitch - (e.clientY - mouse.lastY) * k, -1.4, 1.4);
+      S.cam.pitch = clamp(S.cam.pitch - (e.clientY - mouse.lastY) * k * inv, -1.4, 1.4);
     }
     mouse.lastX = e.clientX; mouse.lastY = e.clientY;
   });
@@ -2388,7 +2400,7 @@ function onKeyDown(e) {
     return;
   }
   if (st === 'pause') { if (e.code === 'Escape') pause(false); return; }
-  if (st === 'title') { if (e.code === 'Escape') closePanels(); return; }
+  if (st === 'title') { if (e.code === 'Escape') { if (!$('pause').classList.contains('hidden')) titleOptions(false); closePanels(); } return; }
   if (st === 'map') {
     if (e.code === 'KeyM' || e.code === 'Escape') closeMap();
     if (e.code === 'KeyJ') { closeMap(); requestJump(); }
