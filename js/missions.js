@@ -1,6 +1,7 @@
 // Missão guia: uma sequência de objetivos derivada do estado do jogo (S.flags), sem estado próprio.
 // Cada passo diz o que fazer, quais teclas usar e — quando faz sentido — onde fica o ponto de navegação.
 import { KM_PER_LY, fmtNum } from './util.js';
+import { CATALOG_GOAL } from './novaterra.js';
 
 // ctx: { S, galaxy, fleet, shipGal (Vector3), novaPlanetId }
 export function missionStatus(ctx) {
@@ -89,6 +90,42 @@ export function missionStatus(ctx) {
       text: 'Pouse na Nova Terra e pise no novo lar.',
       keys: [['P', 'Pouso automático'], ['E', 'Desembarcar']],
       wp: ctx.novaPlanetId && here(nova) ? { kind: 'body', id: ctx.novaPlanetId, label: 'NOVA TERRA' } : { kind: 'star', index: nova, label: 'NOVA TERRA' },
+    },
+    // ---- levantamento da Nova Terra e o pouso da Aurora
+    {
+      done: f.catalogDone,
+      title: 'Catálogo da vida',
+      text: `A pé, mire num animal ou numa planta e escaneie (${Math.min(Object.keys(f.catalog || {}).length, CATALOG_GOAL)}/${CATALOG_GOAL} espécies).`,
+      keys: [['F', 'Escanear o que está na mira'], ['L', 'Ver o catálogo']],
+      wp: null,
+    },
+    {
+      done: f.probeRead,
+      title: 'Vigia-7',
+      text: f.probeDir ? 'A sonda que mandou o sinal caiu na Nova Terra. Encontre-a e leia a memória dela.' : 'Volte à superfície da Nova Terra: LUMEN vai rastrear o pulso da Vigia-7.',
+      keys: f.probeDir ? [['T', 'Marcar'], ['P', 'Pousar perto'], ['F', 'Ler (a pé)']] : [['P', 'Pousar']],
+      wp: f.probeDir ? { kind: 'surf', dir: f.probeDir, label: 'VIGIA-7' } : null,
+    },
+    {
+      done: f.sanctRead,
+      title: 'Os Guardiões',
+      text: 'A última imagem da Vigia-7 mostra uma estrutura que não é natural. Vá até ela.',
+      keys: [['T', 'Marcar'], ['P', 'Pousar perto'], ['F', 'Examinar (a pé)']],
+      wp: f.sanctDir ? { kind: 'surf', dir: f.sanctDir, label: 'ESTRUTURA' } : null,
+    },
+    {
+      done: !!f.beaconDir,
+      title: 'Um lugar para a Aurora',
+      text: 'Ache um campo plano, aberto e perto da água. Pouse, desembarque e finque o sinalizador.',
+      keys: [['B', 'Fincar o sinalizador (a pé)'], ['P', 'Pousar']],
+      wp: null,
+    },
+    {
+      done: f.auroraLanded,
+      title: 'O pouso da Aurora',
+      text: 'A Aurora está descendo. Fique por perto e assista.',
+      keys: [],
+      wp: f.auroraDir ? { kind: 'surf', dir: f.auroraDir, label: 'AURORA' } : null,
     },
   ];
   const idx = steps.findIndex((s) => !s.done);

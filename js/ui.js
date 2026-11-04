@@ -3,6 +3,7 @@ import { KIND_NAME, KIND_DESC } from './galaxy.js';
 import { TYPE_NAME } from './system.js';
 import { fmtDist, fmtNum, fmtTime, R_EARTH, KM_PER_LY, C_KMS } from './util.js';
 import { SPEAKER_COLOR } from './fleet.js';
+import { SPECIES } from './novaterra.js';
 
 // Falas em fila, legendadas no centro da tela (estilo cinema); avisos curtos viram um "toast"
 const TOAST_FROM = new Set(['NAV', 'ÁUDIO', 'MISSÃO']);
@@ -233,6 +234,7 @@ export const UI = {
       </div>
       <h3>PLANETAS ESCANEADOS (${list.length})</h3>
       ${list.length ? list.map((x) => `<div class="logrow"><span>${esc(x.name)}<br><small class="muted">${esc(x.system)}</small></span><span class="muted">${esc(TYPE_NAME[x.type] || x.type)}</span><span style="color:${habColor(x.score)};font-family:var(--title)">${x.score}%</span></div>`).join('') : '<p class="note">Nenhum ainda. Aproxime-se de um planeta e pressione [F].</p>'}
+      ${S.flags && S.flags.novaWalk ? catalogHtml(S.flags.catalog || {}) : ''}
       <p class="note">Missão: encontrar um mundo com habitabilidade acima de 90%. A sonda Vigia-7 apontou uma região — veja no mapa [M].</p>
       <button class="btn" data-close="logPanel">Fechar [L]</button>`;
     p.classList.remove('hidden');
@@ -307,6 +309,17 @@ export const UI = {
     $('end-menu').onclick = onMenu;
   },
 };
+
+// catálogo de espécies da Nova Terra (desconhecidas aparecem como ???)
+function catalogHtml(cat) {
+  const ids = Object.keys(SPECIES), n = ids.filter((id) => cat[id]).length;
+  return `<h3>VIDA NA NOVA TERRA (${n}/${ids.length})</h3>` + ids.map((id) => {
+    const sp = SPECIES[id];
+    return cat[id]
+      ? `<div class="logrow"><span>${esc(sp.nome)}<br><small class="muted">${esc(sp.desc)}</small></span><span class="muted">${sp.tipo}</span></div>`
+      : `<div class="logrow"><span class="muted">??? · ${sp.tipo === 'fauna' ? 'animal' : 'planta'} ainda não catalogado</span></div>`;
+  }).join('');
+}
 
 export function habColor(s) {
   if (s >= 85) return '#6dffb5';

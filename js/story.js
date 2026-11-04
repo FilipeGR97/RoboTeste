@@ -30,7 +30,49 @@ export const EPILOGUE = [
   ['???', 'FIQUEM. MAS LEMBREM: ESTAMOS OLHANDO.'],
   ['LUMEN', 'Comandante… as Sombras estão indo embora. Todas.'],
   ['ATLAS', 'Aqui é a Esperança. A Aurora acabou de sair do salto: quarenta mil pessoas dormindo. Vamos acordá-las em casa.'],
+  ['ATLAS', 'Comandante, antes de pousar uma arca precisamos conhecer este mundo. Catalogue o que vive aí embaixo.'],
 ];
+
+// Capítulo I, segunda parte: o levantamento da Nova Terra e o pouso da Aurora
+export const NOVA = {
+  catalog: [
+    ['LUMEN', 'Mire num animal ou numa planta e pressione [F]: o scanner do traje identifica a espécie. O catálogo fica no diário [L].'],
+  ],
+  catalogDone: [
+    ['LUMEN', 'Seis espécies catalogadas. Nenhuma é perigosa para nós — e nenhuma usa as mesmas proteínas que a vida da Terra.'],
+    ['LUMEN', 'Comandante… estou captando um pulso fraco na frequência da Vigia-7. Vem daqui, da superfície. A sonda caiu neste planeta.'],
+  ],
+  probeFound: [
+    ['LUMEN', 'É ela. A Vigia-7 entrou rápido demais e se partiu ao tocar o chão, mas a memória está inteira. Chegue perto e pressione [F].'],
+  ],
+  probeRead: [
+    ['REGISTRO', 'VIGIA-7 · ÚLTIMA GRAVAÇÃO. Atmosfera: 21% de oxigênio. Água líquida. Fotossíntese ativa. Transmitindo para a Terra.'],
+    ['REGISTRO', 'Anomalia na superfície: estrutura geométrica, material desconhecido, emissão constante no infravermelho. Idade estimada: quatro bilhões de anos.'],
+    ['REGISTRO', 'Objeto não identificado se aproximando da sonda. Mesma assinatura da estrutura. Perda de contr—'],
+    ['LUMEN', 'As Sombras derrubaram a Vigia-7… depois que ela mandou o sinal. Elas queriam que a gente viesse? Tenho as coordenadas da estrutura.'],
+  ],
+  sanctSeen: [
+    ['LUMEN', 'Monólitos em círculo, e algo flutuando no centro. O material é o mesmo das Sombras. Chegue perto e pressione [F] para examinar.'],
+  ],
+  sanctRead: [
+    ['LUMEN', 'Os símbolos nos monólitos são um mapa estelar. Reconheço a Nova Terra… e a Terra. E uma terceira estrela, muito longe, no braço de Perseu.'],
+    ['LUMEN', 'Há uma linha ligando as três. A Terra está marcada com o mesmo símbolo que aparece no casco do Érebo.'],
+    ['???', 'ESTE LUGAR É UMA PROMESSA. NÃO A QUEBREM.'],
+    ['ATLAS', 'Comandante, a Aurora não pode esperar mais em órbita: os sistemas de sono criogênico estão no limite. Escolha onde ela vai pousar.'],
+  ],
+  colonyTip: [
+    ['LUMEN', 'Precisamos de um campo plano, sem floresta fechada, perto de um rio ou do mar, longe dos polos. A pé, pressione [B] para fincar o sinalizador. Eu digo se o lugar serve.'],
+  ],
+  beacon: [
+    ['GAIA', 'Aqui é GAIA, da Aurora. Sinalizador recebido. Iniciando descida. Quarenta mil pessoas e dois quilômetros de arca: peço que se afaste do ponto de pouso.'],
+    ['ATLAS', 'Toda a frota está olhando, comandante. Quase sessenta anos-luz desde a Terra. Ninguém achou que conseguiríamos.'],
+  ],
+  landed: [
+    ['GAIA', 'Contato. A Aurora está no chão. Iniciando o despertar dos primeiros colonos.'],
+    ['GAIA', 'Leituras de temperatura… respiração… pulso. Eles estão acordando, comandante. Estão acordando em casa.'],
+    ['LUMEN', 'Bem-vindos à Nova Terra.'],
+  ],
+};
 
 // ctx: { S, galaxy, fleet, say(speaker, text, opts), shipGal, inSystem(star) }
 export function storyTick(ctx, dt) {

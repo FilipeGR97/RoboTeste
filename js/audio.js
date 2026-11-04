@@ -502,12 +502,71 @@ export class AudioEngine {
     const f0 = 140 + Math.random() * 60;
     for (const [k, v] of [[1, 0.05], [2.76, 0.03], [5.4, 0.018], [8.9, 0.01]]) this.tone(f0 * k, 0.5 + strength * 0.9, v * strength, 'sine', 0, true, f0 * k * 0.97);
   }
+  // tom curto no canal de ambiência (sons da natureza)
+  ambTone(freq, dur, vol, when = 0, endFreq = null) {
+    const ctx = this.ctx, t = ctx.currentTime + when;
+    const o = ctx.createOscillator(); o.frequency.setValueAtTime(freq, t);
+    if (endFreq) o.frequency.exponentialRampToValueAtTime(endFreq, t + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + 0.006); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.ambBus);
+    const rg = ctx.createGain(); rg.gain.value = 0.3; g.connect(rg).connect(this.rev.amb);
+    o.start(t); o.stop(t + dur + 0.05);
+  }
   // canto de pássaro (Nova Terra)
   chirp() {
     if (!this.ctx) return;
     const f0 = 2200 + Math.random() * 1800;
     const n = 2 + Math.floor(Math.random() * 3);
-    for (let k = 0; k < n; k++) this.tone(f0 * (1 + k * 0.08), 0.09, 0.012, 'sine', k * 0.12, true, f0 * (1.25 + k * 0.05));
+    for (let k = 0; k < n; k++) this.ambTone(f0 * (1 + k * 0.08), 0.09, 0.016, k * 0.12, f0 * (1.25 + k * 0.05));
+  }
+  // natureza: chuva, ondas na praia, folhas ao vento e grilos (níveis 0..1)
+  setNature(n) {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    if (!this.nat) {
+      const mk = (buf, type, f, q) => {
+        const s = this.noiseSrc(buf), fl = ctx.createBiquadFilter(), g = ctx.createGain();
+        fl.type = type; fl.frequency.value = f; fl.Q.value = q; g.gain.value = 0;
+        s.connect(fl).connect(g).connect(this.ambBus); s.start();
+        return { g, fl };
+      };
+      this.nat = { rain: mk(this.whiteBuf, 'highpass', 1100, 0.4), rainLow: mk(this.noiseBuf, 'lowpass', 450, 0.6), waves: mk(this.noiseBuf, 'lowpass', 420, 0.7), leaves: mk(this.whiteBuf, 'bandpass', 2600, 0.5) };
+      // a arrebentação sobe e desce a cada ~9 s
+      const lfo = ctx.createOscillator(); lfo.frequency.value = 0.11;
+      this.nat.waveLfo = ctx.createGain(); this.nat.waveLfo.gain.value = 0;
+      lfo.connect(this.nat.waveLfo).connect(this.nat.waves.g.gain); lfo.start();
+      this.cricketAt = 0;
+    }
+    const t = ctx.currentTime, N = this.nat;
+    N.rain.g.gain.setTargetAtTime(n.rain * 0.06, t, 0.8); N.rainLow.g.gain.setTargetAtTime(n.rain * 0.3, t, 0.8);
+    N.waves.g.gain.setTargetAtTime(n.waves * 0.16, t, 1); N.waveLfo.gain.setTargetAtTime(n.waves * 0.13, t, 1);
+    N.leaves.g.gain.setTargetAtTime(n.leaves * 0.014, t, 1);
+    if (n.crickets > 0.05 && t > this.cricketAt) {
+      const f = 4300 + Math.random() * 900, v = 0.007 * n.crickets;
+      for (let k = 0; k < 3; k++) this.ambTone(f, 0.028, v, k * 0.045);
+      this.cricketAt = t + 0.35 + Math.random() * 1.2;
+    }
+  }
+  // trovão: estalo (se perto) e ronco grave que rola por alguns segundos
+  thunder(delay = 2) {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime + delay;
+    const n = this.noiseSrc(this.noiseBuf);
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.setValueAtTime(700 / (1 + delay * 0.5), t); lp.frequency.exponentialRampToValueAtTime(90, t + 5);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.5 / (1 + delay * 0.3), t + 0.08);
+    g.gain.setTargetAtTime(0.25 / (1 + delay * 0.3), t + 0.4, 0.5); g.gain.setTargetAtTime(0, t + 1.6, 1.4);
+    n.connect(lp).connect(g); g.connect(this.ambBus); g.connect(this.rev.amb);
+    n.start(t, Math.random() * 2); n.stop(t + 7);
+  }
+  // passo de um titã: baque grave que se sente mais do que se ouve
+  stomp(level) {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const o = ctx.createOscillator(); o.frequency.setValueAtTime(48, t); o.frequency.exponentialRampToValueAtTime(26, t + 0.7);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.35 * level, t + 0.03); g.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
+    o.connect(g).connect(this.ambBus); o.start(t); o.stop(t + 1);
   }
   step() {
     if (!this.ctx) return;

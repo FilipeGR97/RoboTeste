@@ -16,6 +16,9 @@ Não precisa instalar nada além disso: o Three.js já está em `lib/`.
 - `js/galaxy.js`, `js/system.js` — galáxia e sistemas estelares
 - `js/terrain.js` — superfície dos planetas (pouso e caminhada)
 - `js/flightfx.js` — sombra da nave no chão, poeira dos motores e plasma da reentrada
+- `js/clouds.js` — nuvens de perto: neblina ao atravessar a camada e flocos em volta da nave
+- `js/flora.js` — florestas (espécies de árvores, mata vista do ar, vento nas copas)
+- `js/novaterra.js` — Nova Terra: fauna, noite, chuva, a sonda Vigia-7, o Santuário e o pouso da Aurora
 - `js/audio.js` — trilha procedural (três peças que se revezam), ambiência e efeitos
 - `js/fleet.js`, `js/story.js`, `js/missions.js` — frota, história e missões
 - `js/map.js` — mapa galáctico e catálogo de exoplanetas

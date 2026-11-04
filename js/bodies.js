@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { rockyMaterial, gasMaterial, atmosphereMaterial, ringMaterial, starMaterial, glareMaterial, impostorMaterial } from './shaders.js';
 import { bodyPosition } from './system.js';
+import { CLOUD_DRIFT } from './clouds.js';
 import { tempToRGB, KM_PER_AU, mulberry32, gauss, clamp } from './util.js';
 
 const SPIN_SCALE = 30; // rotação planetária acelerada para ser perceptível
@@ -256,15 +257,17 @@ export class SystemView {
       u.uSunCol.value.copy(this.lightColor);
       const oct = Math.log2(b.radius / (dP * pxAngle * 3));
       u.uOct.value = clamp(oct, 3, b.visual.shader === 'gas' ? 7 : 13);
-      if (u.uCloudRot) u.uCloudRot.value = (t * 0.002) % (Math.PI * 2);
+      if (u.uCloudRot) u.uCloudRot.value = (t * CLOUD_DRIFT) % (Math.PI * 2); // as nuvens giram com o planeta e derivam devagar
       if (it.atm) {
         const am = it.atm.material.uniforms;
         am.uCenter.value.copy(it.world);
         am.uR.value = b.radius;
         am.uSunPos.value.copy(sp.world);
         am.uSunCol.value.copy(this.lightColor);
-        am.uSunI.value = 9 * sunI;
-        const inside = it.world.distanceTo(camW) < b.radius * it.atmTop * 1.002;
+        const dc = it.world.distanceTo(camW);
+        // de dentro, o céu fica mais claro conforme se desce pelas camadas
+        am.uSunI.value = 9 * sunI * (1 + 0.5 * clamp((b.radius * it.atmTop - dc) / (b.radius * (it.atmTop - 1)), 0, 1));
+        const inside = dc < b.radius * it.atmTop * 1.002;
         it.atm.material.side = inside ? THREE.BackSide : THREE.FrontSide;
       }
       if (it.ring) {

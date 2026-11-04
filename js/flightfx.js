@@ -4,19 +4,33 @@ import * as THREE from 'three';
 import { heightAt } from './terrain.js';
 import { clamp, smoothstep } from './util.js';
 
-// sombra: fuselagem estreita + asas largas atrás, borrada nas bordas
-function shadowTexture() {
-  const c = document.createElement('canvas');
-  c.width = c.height = 128;
-  const g = c.getContext('2d');
-  g.filter = 'blur(6px)';
-  g.fillStyle = '#fff';
-  g.beginPath(); g.ellipse(64, 64, 15, 54, 0, 0, Math.PI * 2); g.fill();
-  g.beginPath(); g.moveTo(64, 30); g.lineTo(124, 100); g.lineTo(4, 100); g.closePath(); g.fill();
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
-}
+// sombra: a silhueta real da nave vista do sol (renderizada numa textura pequena a cada quadro) projetada
+// no chão; a penumbra cresce com a altura, como a do sol de verdade
+const SHADOW_VERT = /* glsl */ `
+#include <common>
+#include <logdepthbuf_pars_vertex>
+varying vec3 vW;
+void main(){
+  vec4 w = modelMatrix * vec4(position, 1.0);
+  vW = w.xyz;
+  gl_Position = projectionMatrix * viewMatrix * w;
+  #include <logdepthbuf_vertex>
+}`;
+const SHADOW_FRAG = /* glsl */ `
+#include <logdepthbuf_pars_fragment>
+uniform sampler2D tSil; uniform vec3 uC, uRight, uUp; uniform float uHs, uBlur, uOp;
+varying vec3 vW;
+void main(){
+  vec3 d = vW - uC;
+  vec2 uv = vec2(dot(d, uRight), dot(d, uUp)) / (2.0 * uHs) + 0.5;
+  float a = 0.0;
+  for (int i = -2; i <= 2; i++) for (int j = -2; j <= 2; j++) a += texture2D(tSil, uv + vec2(float(i), float(j)) * uBlur * 0.5).a;
+  a /= 25.0;
+  a *= step(0.0, uv.x) * step(uv.x, 1.0) * step(0.0, uv.y) * step(uv.y, 1.0);
+  if (a * uOp < 0.004) discard;
+  gl_FragColor = vec4(0.0, 0.0, 0.0, a * uOp);
+  #include <logdepthbuf_fragment>
+}`;
 
 const PUFF_VERT = /* glsl */ `
 #include <common>
@@ -84,7 +98,13 @@ const N_PUFF = 220;
 export class FlightFX {
   constructor(scene, shipLayer) {
     // sombra
-    this.shadow = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: shadowTexture(), color: 0x000000, transparent: true, opacity: 0, depthWrite: false }));
+    this.silRT = new THREE.WebGLRenderTarget(192, 192, { depthBuffer: false });
+    this.silCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    this.silCam.layers.set(shipLayer);
+    this.silMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+    this.shadowU = { tSil: { value: this.silRT.texture }, uC: { value: new THREE.Vector3() }, uRight: { value: new THREE.Vector3() }, uUp: { value: new THREE.Vector3() }, uHs: { value: 1 }, uBlur: { value: 0 }, uOp: { value: 0 } };
+    this.shadow = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({ vertexShader: SHADOW_VERT, fragmentShader: SHADOW_FRAG, uniforms: this.shadowU, transparent: true, depthWrite: false }));
+    this.sil = null; this.silR = new Map();
     this.shadow.matrixAutoUpdate = false;
     this.shadow.frustumCulled = false;
     this.shadow.visible = false;
@@ -157,8 +177,9 @@ export class FlightFX {
     const L = o.L;
     const sunL = this._b.copy(o.sunScene).applyQuaternion(qi);
     const cosS = sunL.dot(up);
-    const maxAlt = Math.max(0.3, L * 25);
-    const op = 0.72 * (1 - smoothstep(maxAlt * 0.3, maxAlt, alt)) * smoothstep(0.06, 0.25, cosS);
+    // some com a altura: a penumbra do sol cresce ~1 m a cada 100 m e o ar tira o contraste (no máximo ~4 km)
+    const maxAlt = clamp(L * 12, 0.25, 4);
+    const op = 0.72 * (1 - smoothstep(maxAlt * 0.25, maxAlt, alt)) * smoothstep(0.06, 0.25, cosS);
     this.shadow.visible = op > 0.01;
     if (!this.shadow.visible) return;
     // ponto onde a sombra cai: segue o raio do sol a partir da nave até o chão
@@ -178,14 +199,55 @@ export class FlightFX {
     if (fwd.lengthSq() < 1e-10) fwd.copy(t1);
     fwd.normalize();
     const right = new THREE.Vector3().crossVectors(fwd, n);
-    const blur = 1 + Math.max(alt, 0) / L * 0.04;
+    const hs = this.silRadius(o.shipGroup, L);
+    const pen = Math.max(alt, 0) * 0.0093 + hs * 0.02; // largura da penumbra (km)
     const pos = d.multiplyScalar(gr).addScaledVector(n, Math.max(0.0012, L * 0.05)).sub(o.frameRel).applyQuaternion(o.q);
     const m = this._m.makeBasis(right.applyQuaternion(o.q), fwd.applyQuaternion(o.q), n.applyQuaternion(o.q));
-    m.scale(this._d.set(L * 1.0 * blur, L * 1.05 * blur, 1));
+    const span = (hs * 2.3 + pen * 2) / Math.max(cosS, 0.3);
+    m.scale(this._d.set(span, span, 1));
     m.setPosition(pos);
     this.shadow.matrix.copy(m);
     this.shadow.matrixWorldNeedsUpdate = true;
-    this.shadow.material.opacity = op / Math.sqrt(blur);
+    const u = this.shadowU;
+    u.uOp.value = op / (1 + pen / hs);
+    u.uBlur.value = pen / (2 * hs);
+    u.uHs.value = hs;
+    this.sil = { c: o.shipScene.clone(), s: o.sunScene.clone(), hs, group: o.shipGroup };
+  }
+  // raio da esfera que envolve a nave (as naves grandes são mais largas que compridas: anéis, painéis)
+  silRadius(group, L) {
+    if (!group) return L * 0.6;
+    if (!this.silR.has(group)) {
+      const b = new THREE.Box3().setFromObject(group), s = new THREE.Sphere();
+      b.getBoundingSphere(s);
+      this.silR.set(group, s.radius > 0 && isFinite(s.radius) ? s.radius / Math.max(group.scale.x, 1e-9) : L * 0.6);
+    }
+    return this.silR.get(group) * group.scale.x;
+  }
+  // desenha a silhueta da nave vista do sol (só a camada da nave, sem o fogo dos motores e o plasma)
+  bakeShadow(renderer, scene, hide) {
+    if (!this.shadow.visible || !this.sil) return;
+    const { c, s, hs } = this.sil, cam = this.silCam, u = this.shadowU;
+    cam.left = -hs; cam.right = hs; cam.top = hs; cam.bottom = -hs; cam.near = 0; cam.far = hs * 8;
+    cam.position.copy(c).addScaledVector(s, hs * 4);
+    cam.up.set(0, 1, 0); if (Math.abs(s.y) > 0.95) cam.up.set(1, 0, 0);
+    cam.lookAt(c);
+    cam.updateProjectionMatrix(); cam.updateMatrixWorld();
+    u.uC.value.copy(c);
+    u.uRight.value.setFromMatrixColumn(cam.matrixWorld, 0).normalize();
+    u.uUp.value.setFromMatrixColumn(cam.matrixWorld, 1).normalize();
+    const prevT = renderer.getRenderTarget(), prevO = scene.overrideMaterial, prevA = renderer.getClearAlpha(), prevC = renderer.getClearColor(new THREE.Color());
+    const vis = hide.map((o) => o.visible);
+    hide.forEach((o) => { o.visible = false; });
+    const sh = this.shock.visible; this.shock.visible = false;
+    scene.overrideMaterial = this.silMat;
+    renderer.setRenderTarget(this.silRT);
+    renderer.setClearColor(0x000000, 0); renderer.clear();
+    renderer.render(scene, cam);
+    renderer.setRenderTarget(prevT); renderer.setClearColor(prevC, prevA);
+    scene.overrideMaterial = prevO;
+    hide.forEach((o, i) => { o.visible = vis[i]; });
+    this.shock.visible = sh;
   }
 
   updatePuffs(dt, o, qi, up, alt, g0, ground) {

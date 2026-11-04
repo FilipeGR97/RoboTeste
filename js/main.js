@@ -8,7 +8,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Galaxy, KIND_NAME, KIND_DESC } from './galaxy.js';
 import { getSystem, bodyPosition, TYPE_NAME } from './system.js';
 import { SystemView, spinAngle } from './bodies.js';
-import { PlanetSurface, GroundDetail, LifeDetail, heightAt, terrainParams } from './terrain.js';
+import { PlanetSurface, GroundDetail, LifeDetail, heightAt, vegAt, terrainParams } from './terrain.js';
 import { Sky } from './sky.js';
 import { SHIPS, buildShip, setShipScale } from './ships.js';
 import { AudioEngine } from './audio.js';
@@ -17,8 +17,11 @@ import { CinematicShader, SanitizeShader, tunnelMaterial, streakMaterial, LensSh
 import { UI, $, remarkFor } from './ui.js';
 import { missionStatus } from './missions.js';
 import { Fleet, FleetView, ShadowEncounter, exoCatalog, FLEET } from './fleet.js';
-import { INTRO, storyTick, TUPA_LOG, EPILOGUE } from './story.js';
+import { INTRO, storyTick, TUPA_LOG, EPILOGUE, NOVA } from './story.js';
 import { FlightFX } from './flightfx.js';
+import { CloudPassage, CLOUD_DRIFT } from './clouds.js';
+import { Forest } from './flora.js';
+import { NovaWorld, SPECIES, CATALOG_GOAL, pickSite, rateColonySite } from './novaterra.js';
 import { KM_PER_LY, KM_PER_AU, C_KMS, clamp, smoothstep, fmtDist, fmtSpeed, fmtTime, fmtNum } from './util.js';
 
 const SAVE_KEY = 'ultimoHorizonte.save.v1';
@@ -74,7 +77,7 @@ const audio = new AudioEngine();
 audio.vol = { music: settings.music, sfx: settings.sfx, amb: settings.amb };
 audio.ticking = settings.tick;
 
-let galaxy, sky, map, composer, bloom, cine, preview, warpFx, lens, dust, fleet, shipPass, fx;
+let galaxy, sky, map, composer, bloom, cine, preview, warpFx, lens, dust, fleet, shipPass, fx, clouds;
 const jumpRange = () => S.shipDef.jump * (S.flags && S.flags.iaraSaved ? 1.3 : 1);
 
 // ------------------------------------------------------------------------------------------------
@@ -122,6 +125,7 @@ async function init() {
   setupWarpFx();
   setupDust();
   fx = new FlightFX(scene, SHIP_LAYER);
+  clouds = new CloudPassage(scene);
   setupPreview();
   bindUI();
   // Sistema Solar como cenário da tela de título
@@ -132,7 +136,7 @@ async function init() {
   if (localStorage.getItem(SAVE_KEY)) $('btn-continue').classList.remove('hidden');
   $('loading').classList.add('hidden');
   S.state = 'title';
-  window.__UH = { S, sky, scene, camera, galaxy, map, renderer, composer, bloom, cine, audio, fleet, spawnShadow: () => spawnShadow() };
+  window.__UH = { S, sky, scene, camera, galaxy, map, renderer, composer, bloom, cine, audio, fleet, fx, clouds, spawnShadow: () => spawnShadow() };
   requestAnimationFrame(loop);
 }
 
@@ -419,6 +423,8 @@ function dropSurface() {
   S.surf.surface.dispose();
   if (S.surf.detail) S.surf.detail.dispose();
   if (S.surf.life) S.surf.life.dispose();
+  if (S.surf.forest) S.surf.forest.dispose();
+  if (S.surf.nova) S.surf.nova.dispose();
   S.surf.item.surfaceOn = false;
   S.surf = null;
 }
@@ -625,7 +631,8 @@ function updatePrompts(dt) {
   } else if (S.mode === 'foot') {
     const d = S.walker.pos.distanceTo(new THREE.Vector3(...S.landed.rel)) * 1000;
     if (d < S.ship.length * 700 + 25) L.push({ k: 'E', t: 'Voltar à nave' });
-    L.push({ k: 'F', t: 'Coletar amostra' });
+    L.push(footFPrompt());
+    if (S.surf && S.surf.item.body.special === 'nova' && S.flags.sanctRead && !S.flags.beaconDir) L.push({ k: 'B', t: 'Fincar o sinalizador da Aurora' });
   } else if (S.landed) {
     if (!S.landed.water) L.push({ k: 'E', t: 'Desembarcar' });
     L.push({ k: 'W', t: 'Decolar · [Espaço] subir na vertical' });
@@ -1140,6 +1147,7 @@ function hazards(dt) {
   if (rate > 0) damage(rate * dt);
   else if (S.dmgT > 4) S.hull = Math.min(100, S.hull + dt * 4);
   hazardTxt = warn;
+  if (clouds.fog > fog && S.mode === 'ship') { fog = clouds.fog; fogC.set(clouds.fogCol.r, clouds.fogCol.g, clouds.fogCol.b); }
   cine.uniforms.uFog.value += (fog - cine.uniforms.uFog.value) * (1 - Math.exp(-dt * 4));
   cine.uniforms.uHeat.value += (heat - cine.uniforms.uHeat.value) * (1 - Math.exp(-dt * 3));
   if (rate > 0 && performance.now() - (hazards.lastAlarm || 0) > 2500) { hazards.lastAlarm = performance.now(); audio.alert(); }
@@ -1295,6 +1303,123 @@ function footCamera() {
   S.ship.group.position.set(L.rel[0] - S.frame.rel[0], L.rel[1] - S.frame.rel[1], L.rel[2] - S.frame.rel[2]).applyQuaternion(q);
   S.ship.group.quaternion.copy(q).multiply(_fq2.fromArray(L.q));
 }
+// ---------------------------------------------------------------- scanner do traje (Nova Terra)
+const sayLines = (L) => { for (const [sp, t] of L) UI.say(sp, t, { glitch: sp === '???' }); audio.message(); };
+// o que está na mira: o alvo com menor desvio angular dentro do alcance
+function aimTarget() {
+  const nv = S.surf && S.surf.nova;
+  if (S.mode !== 'foot' || !nv) return null;
+  const me = new THREE.Vector3(...S.frame.rel);
+  const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).applyQuaternion(planetQuat(S.surf.item.body).clone().invert());
+  let best = null, bs = 1;
+  for (const t of nv.targets(S.surf.forest, S.surf.life)) {
+    const to = t.p.clone().sub(me), d = to.length();
+    if (d > (t.max || 0.4) || d < 1e-6) continue;
+    const ang = Math.acos(clamp(to.divideScalar(d).dot(fwd), -1, 1)), lim = Math.atan(t.r / d) + 0.03;
+    if (ang / lim < bs) { bs = ang / lim; best = { ...t, d }; }
+  }
+  return best;
+}
+// lugar da história ao alcance do scanner
+function siteNear() {
+  const nv = S.surf && S.surf.nova, f = S.flags;
+  if (S.mode !== 'foot' || !nv) return null;
+  const me = new THREE.Vector3(...S.frame.rel);
+  if (f.probeDir && !f.probeRead && nv.sites.probe && nv.sites.probe.p.distanceTo(me) < 0.04) return { id: 'probe', label: 'Ler a memória da Vigia-7', dur: 3 };
+  if (f.sanctDir && f.probeRead && !f.sanctRead && nv.sites.sanct && nv.sites.sanct.p.distanceTo(me) < 0.12) return { id: 'sanct', label: 'Examinar o Santuário', dur: 4 };
+  return null;
+}
+function footScanStart() {
+  if (S.footScan) return;
+  const s = siteNear() || (() => { const a = aimTarget(); return a ? { id: a.id, label: 'Espécie', dur: 1.6 } : null; })();
+  if (!s) { sampleGround(); return; }
+  S.footScan = { id: s.id, t: 0, dur: s.dur, lost: 0 };
+  $('scanbar').classList.remove('hidden');
+  $('scanname').textContent = s.id === 'probe' ? 'Vigia-7' : s.id === 'sanct' ? 'Santuário' : 'Espécie';
+  audio.scanStart();
+}
+function updateFootScan(dt) {
+  const fs = S.footScan;
+  if (!fs) return;
+  const stop = (msg) => { S.footScan = null; $('scanbar').classList.add('hidden'); if (msg) UI.msg(msg, 'warn', 'TRAJE'); };
+  if (S.mode !== 'foot' || !S.surf || !S.surf.nova) return stop();
+  if (SPECIES[fs.id]) {
+    const a = aimTarget();
+    fs.lost = a && a.id === fs.id ? 0 : fs.lost + dt;
+    if (fs.lost > 0.7) return stop('Perdemos a mira. Mantenha o alvo no centro da tela.');
+  }
+  fs.t += dt;
+  $('scanfill').style.width = Math.min(100, (fs.t / fs.dur) * 100) + '%';
+  if (fs.t < fs.dur) return;
+  stop();
+  const f = S.flags;
+  if (fs.id === 'probe') { f.probeRead = true; sayLines(NOVA.probeRead); audio.scanDone(); }
+  else if (fs.id === 'sanct') { f.sanctRead = true; f.tSanct = S.stats.time; sayLines(NOVA.sanctRead); audio.discovery(); }
+  else {
+    const sp = SPECIES[fs.id];
+    f.catalog = f.catalog || {};
+    const first = !f.catalog[fs.id];
+    f.catalog[fs.id] = true;
+    UI.msg(`${sp.nome} — ${sp.desc}`, 'good', first ? 'NOVA ESPÉCIE' : 'CATÁLOGO', 12000);
+    audio.scanDone(); if (first) audio.discovery();
+  }
+  save();
+}
+function footFPrompt() {
+  const s = siteNear();
+  if (s) return { k: 'F', t: s.label };
+  const a = aimTarget();
+  if (a) return { k: 'F', t: `Escanear: ${S.flags.catalog && S.flags.catalog[a.id] ? SPECIES[a.id].nome : 'espécie desconhecida'}` };
+  return { k: 'F', t: 'Coletar amostra' };
+}
+// [B] finca o sinalizador do pouso da Aurora
+function placeBeacon() {
+  const f = S.flags;
+  if (!S.surf || S.surf.item.body.special !== 'nova') return;
+  if (!f.sanctRead) { UI.msg('Ainda não: termine o levantamento da Nova Terra primeiro.', 'warn'); return; }
+  if (f.beaconDir) { UI.msg('O sinalizador já está fincado.'); return; }
+  if (S.mode !== 'foot') { UI.msg('Pouse e desembarque [E] para fincar o sinalizador.', 'warn'); return; }
+  const d = S.walker.pos.clone().normalize();
+  const r = rateColonySite(S.surf.P, d);
+  UI.say('LUMEN', r.why); audio.message();
+  if (!r.ok) { audio.alert(); return; }
+  f.beaconDir = d.toArray();
+  const fb = footBasis(d);
+  f.auroraDir = d.clone().addScaledVector(fb.north, 1.7 / S.surf.P.R).normalize().toArray(); // a arca pousa a ~1,7 km
+  f.auroraT0 = S.t + 30;
+  sayLines(NOVA.beacon);
+  save();
+}
+// a sequência da Nova Terra (verificada a cada meio segundo)
+function novaMissionTick() {
+  const f = S.flags;
+  if (!f.novaWalk) return;
+  const onNova = !!(S.surf && S.surf.item.body.special === 'nova' && S.si);
+  const P = onNova ? S.surf.P : null;
+  const me = onNova ? (S.mode === 'foot' ? S.walker.pos.clone() : new THREE.Vector3(...S.frame.rel)) : null;
+  const near = (dir, km) => onNova && dir && me.distanceTo(new THREE.Vector3(...dir).multiplyScalar(P.R)) < km;
+  if (f.epilogue && !f.catalogMsg) { f.catalogMsg = true; sayLines(NOVA.catalog); }
+  if (!f.catalogDone && Object.keys(f.catalog || {}).length >= CATALOG_GOAL) { f.catalogDone = true; sayLines(NOVA.catalogDone); save(); }
+  if (f.catalogDone && !f.probeDir && onNova) { f.probeDir = pickSite(P, me.clone().normalize(), 14, 26, 0.02, 0.25, 7); save(); }
+  if (f.probeDir && !f.probeSeen && near(f.probeDir, 1.5)) { f.probeSeen = true; sayLines(NOVA.probeFound); }
+  if (f.probeRead && !f.sanctDir && onNova) { f.sanctDir = pickSite(P, new THREE.Vector3(...f.probeDir), 22, 40, 0.05, 0.35, 13, [new THREE.Vector3(...f.probeDir)]); save(); }
+  if (f.sanctDir && !f.sanctSeen && near(f.sanctDir, 2)) { f.sanctSeen = true; sayLines(NOVA.sanctSeen); }
+  if (f.sanctRead && !f.colonyTip && S.stats.time - (f.tSanct || 0) > 40) { f.colonyTip = true; sayLines(NOVA.colonyTip); }
+  if (f.auroraT0 && !f.auroraLanded && S.t - f.auroraT0 >= 80) { f.auroraLanded = true; f.tLanded = S.stats.time; sayLines(NOVA.landed); audio.discovery(); save(); }
+  if (f.auroraLanded && !f.ch1End && S.stats.time - f.tLanded > 30) { f.ch1End = true; chapterEnd(); }
+}
+function chapterEnd() {
+  const e = $('ending');
+  e.innerHTML = `<div class="pre" style="font-family:var(--title);letter-spacing:8px;font-size:12px;color:var(--hud-dim);margin-bottom:12px">ÚLTIMO HORIZONTE</div>
+    <h1>FIM DO CAPÍTULO I</h1>
+    <p>A Aurora pousou. Quarenta mil pessoas acordam num mundo novo, e as Sombras deixaram a humanidade ficar — por enquanto.<br>O que era o Érebo? Quem ergueu o Santuário? E o que espera no braço de Perseu?</p>
+    <div class="menu"><button class="btn big" id="end-cont">Continuar explorando</button><button class="btn" id="end-menu">Menu principal</button></div>`;
+  e.classList.remove('hidden');
+  $('end-cont').onclick = () => e.classList.add('hidden');
+  $('end-menu').onclick = () => toMenu();
+  audio.discovery();
+  save();
+}
 function sampleGround() {
   const b = S.surf.item.body;
   const f = b.finds && b.finds.length ? b.finds[Math.floor(Math.random() * b.finds.length)] : null;
@@ -1352,17 +1477,28 @@ function surfaceVisuals(dt) {
       sky.lerp(new THREE.Color(1.0, 0.45, 0.2), sunset * 0.55 * day);
       sky.multiply(S.view.lightColor).multiplyScalar(day * Math.min(1, rho * 3) * 0.75);
     }
+    // chuva (Nova Terra): céu fechado, menos sol, mais névoa
+    const wet = S.surf.nova ? S.surf.nova.rainNow : 0;
+    if (wet > 0) sky.multiplyScalar(1 - 0.55 * wet);
     const env = {
       sunView: sunW.clone().transformDirection(camera.matrixWorldInverse),
       sunWorld: S.view.items[0].world, sunCol: S.view.lightColor, sunI: it.mat.uniforms.uSunI.value,
       skyCol: sky, fogCol: sky.clone().multiplyScalar(0.9),
       fogK: 0.012 * rho * (b.type === 'nebuloso' ? 6 : b.type === 'venusiano' ? 3 : 1),
-      day: Math.min(1, rho * 4), time: elapsed % 1000, cloudRot: (S.t * 0.002) % (Math.PI * 2),
+      day: Math.min(1, rho * 4), time: elapsed % 1000, cloudRot: (spinAngle(b, S.t) + S.t * CLOUD_DRIFT) % (Math.PI * 2),
     };
+    if (wet > 0) { env.sunI *= 1 - 0.5 * wet; env.fogK = env.fogK * (1 + 5 * wet) + 0.02 * wet; }
     it.group.updateMatrixWorld(true);
     const camPl = it.spin.worldToLocal(camera.position.clone());
     env.lamp = landingLamp(dt, it);
     S.surf.surface.update(camPl, camera, env);
+    // atravessando a camada de nuvens
+    const cs = S.surf.surface;
+    if (cs.clouds) {
+      const q = planetQuat(b);
+      const fwd = S.mode === 'ship' && S.speed > 0.01 ? _v.set(0, 0, -1).applyQuaternion(S.quat).applyQuaternion(q.clone().invert()) : null;
+      clouds.update({ b, R: b.radius, cloudAlt: cs.cloudAlt, camPl, q, camera, dt, drift: S.t * CLOUD_DRIFT, light: day, sunCol: S.view.lightColor, speedDir: fwd });
+    } else clouds.hide();
     daylight = day * clamp(rho * 4, 0, 1);
     ambient.color.setRGB(0.19, 0.25, 0.35).lerp(sky, Math.min(1, daylight));
     ambient.intensity = 0.3 + 0.5 * daylight;
@@ -1374,21 +1510,84 @@ function surfaceVisuals(dt) {
       S.surf.detail.group.visible = low;
       if (low && here) S.surf.detail.update(here);
     }
+    // florestas: de perto e, do ar, até ~2 km em volta
+    if (b.life === 'complexa') {
+      const fdir = S.mode === 'foot' ? S.walker.pos.clone().normalize() : S.si ? S.si.dir : null;
+      const falt = S.mode === 'foot' ? 0 : S.si ? S.si.alt : 99;
+      if (fdir && falt < 4 && !S.surf.forest) S.surf.forest = new Forest(it, S.surf.P);
+      if (S.surf.forest) { S.surf.forest.root.visible = !!fdir && falt < 4; if (fdir) S.surf.forest.update(fdir, falt, elapsed, 1 - day); }
+    }
+    // Nova Terra: fauna, noite, chuva e os lugares da história
+    if (b.special === 'nova') {
+      const ndir = S.mode === 'foot' ? S.walker.pos.clone().normalize() : S.si ? S.si.dir : null;
+      const nalt = S.mode === 'foot' ? 0 : S.si ? S.si.alt : 99;
+      if (ndir && !S.surf.nova) S.surf.nova = new NovaWorld(it, S.surf.P, scene);
+      const nv = S.surf.nova;
+      if (nv && ndir) {
+        nv.update({ dir: ndir, alt: nalt, dt, t: elapsed, simT: S.t, night: 1 - day, flags: S.flags, me: camPl, q: planetQuat(b).clone(), camScene: camera.position, upScene: upW.clone(), rainOk: altCam < (S.surf.surface.cloudAlt || 3), H: innerHeight });
+        if (nv.bolt > 0) { cine.uniforms.uFlashC.value.set(0.85, 0.9, 1.0); cine.uniforms.uFlash.value = Math.max(cine.uniforms.uFlash.value, nv.bolt); audio.thunder(0.6 + Math.random() * 3.5); }
+        if (nv.thump > 0) audio.stomp(nv.thump);
+        natureSound(dt, nv, ndir, nalt, day);
+      }
+    }
     // grama, flores e fauna nos mundos com vida
     const lifeOk = b.life === 'complexa' && (S.mode === 'foot' || (S.si && S.si.alt < 0.15));
     if (lifeOk && !S.surf.life) S.surf.life = new LifeDetail(it, S.surf.P);
     if (S.surf.life) {
       S.surf.life.group.visible = lifeOk;
       if (lifeOk && here) { S.surf.life.update(here); S.surf.life.animate(dt, elapsed, here); }
-      if (lifeOk && b.special === 'nova' && Math.random() < dt * 0.25) audio.chirp();
+      if (lifeOk && b.special === 'nova' && Math.random() < dt * 0.25 * day * (1 - wet)) audio.chirp();
+      S.surf.life.flowers.material.emissive.setRGB(0.12, 0.5, 0.55).multiplyScalar((1 - day) * 0.9); // flores-estrela brilham à noite
     }
     audio.setWind(Math.min(1, rho) * clamp((S.mode === 'foot' ? 3 : S.speed * 1000) / 250, 0.08, 1));
   } else {
     ambient.color.setRGB(0.19, 0.25, 0.35);
+    clouds.hide();
     audio.setWind(0);
     lampI = 0; lampLight.intensity = 0;
   }
   return daylight;
+}
+
+// Céu claro de dia dentro de uma atmosfera: as estrelas somem conforme a camada de ar acima da câmera
+// (profundidade óptica até o zênite) e a altura do sol — em qualquer altitude, não só perto do chão
+const _ad = new THREE.Vector3(), _au = new THREE.Vector3();
+function atmosphereDaylight() {
+  if (!S.view) return 0;
+  let best = 0;
+  for (const it of S.view.items) {
+    const a = it.body.visual && it.body.visual.atm;
+    if (!a || !it.atmTop) continue;
+    const R = it.body.radius, d = it.world.distanceTo(camera.position);
+    if (d > R * it.atmTop) continue;
+    const H = (a.thick * R) / 8;
+    const tz = Math.max(a.tauR[0] + a.tauM[0], a.tauR[1] + a.tauM[1], a.tauR[2] + a.tauM[2]) * Math.exp(-Math.max(d - R, 0) / H);
+    _au.copy(camera.position).sub(it.world).normalize();
+    const elev = _ad.copy(S.view.items[0].world).sub(camera.position).normalize().dot(_au);
+    best = Math.max(best, smoothstep(-0.14, 0.1, elev) * smoothstep(0.002, 0.045, tz));
+  }
+  return best;
+}
+
+// sons da Nova Terra perto do chão: ondas (se há mar por perto), folhas nas florestas, grilos à noite e chuva
+let natT = 0, natWater = 0, natForest = 0;
+function natureSound(dt, nv, dir, alt, day) {
+  natT -= dt;
+  const low = S.mode === 'foot' || alt < 0.3;
+  if (natT <= 0 && low) {
+    natT = 1;
+    const P = S.surf.P, f = footBasis(dir);
+    let w = 0;
+    for (let k = 0; k < 8; k++) {
+      const q = dir.clone().addScaledVector(f.north, (Math.cos(k * 0.785) * 0.18) / P.R).addScaledVector(f.east, (Math.sin(k * 0.785) * 0.18) / P.R).normalize();
+      if (heightAt(P, q.x, q.y, q.z).water) w++;
+    }
+    natWater = w / 8;
+    const h = heightAt(P, dir.x, dir.y, dir.z);
+    natForest = vegAt(P, dir.x, dir.y, dir.z, h).forest;
+  }
+  const k = low ? 1 : 0;
+  audio.setNature({ rain: nv.rainNow * (S.mode === 'foot' ? 1 : 0.6), waves: natWater * k, leaves: natForest * k * (0.5 + nv.rainNow), crickets: (1 - day) * (1 - nv.rainNow) * k * (1 - natWater) });
 }
 
 // Sombra no chão, poeira/respingos dos motores e o plasma da reentrada
@@ -1413,7 +1612,7 @@ function updateFlightFx(dt) {
     q: b ? planetQuat(b).clone() : null,
     frameRel: _fxRel.set(...S.frame ? S.frame.rel : [0, 0, 0]),
     ship: _fxShip.set(...(S.landed ? S.landed.rel : S.frame ? S.frame.rel : [0, 0, 0])),
-    shipQuat: S.ship.group.quaternion, shipScene: S.ship.group.position, L: S.ship.length,
+    shipQuat: S.ship.group.quaternion, shipScene: S.ship.group.position, L: S.ship.length, shipGroup: S.ship.group,
     sunScene: _fxSun.copy(S.view.items[0].world).sub(S.ship.group.position).normalize(),
     power, lift: S.mode === 'ship' && S.gw > 0 && (keys.Space || S.liftT > 0), heat: reentry, time: elapsed, camera, H,
   });
@@ -1539,7 +1738,7 @@ function arrive() {
 function scanRange(b) { return Math.max(b.radius * 150, 200000); }
 
 function requestScan() {
-  if (S.mode === 'foot') { sampleGround(); return; }
+  if (S.mode === 'foot') { footScanStart(); return; }
   if (!$('scanPanel').classList.contains('hidden')) { $('scanPanel').classList.add('hidden'); return; }
   if (S.scan) return;
   if (!S.view) { UI.msg('Nenhum planeta ao alcance dos sensores.', 'warn'); return; }
@@ -1661,7 +1860,7 @@ function updateCamera(dt) {
   if (shake > 0) camera.position.add(_v.set((Math.random() - 0.5), (Math.random() - 0.5), (Math.random() - 0.5)).multiplyScalar(L * 0.02 * shake));
   // o ar sacode a câmera (turbulência e plasma da reentrada) e o campo de visão abre um pouco com a velocidade
   const rho = S.env && S.mode === 'ship' && !S.landed ? Math.min(S.env.rho, 1.5) : 0;
-  const turb = rho * smoothstep(0.03, 0.4, S.speed) * 0.35 + reentry * 1.2;
+  const turb = rho * smoothstep(0.03, 0.4, S.speed) * 0.35 + reentry * 1.2 + clouds.inside * smoothstep(0.02, 0.25, S.speed) * 0.5;
   if (turb > 0.005) {
     const t = elapsed;
     camera.position.add(_v.set(Math.sin(t * 13.1) + 0.5 * Math.sin(t * 23.7), Math.sin(t * 11.3 + 1) + 0.5 * Math.sin(t * 19.1), 0).applyQuaternion(camera.quaternion).multiplyScalar(L * 0.006 * turb));
@@ -1955,6 +2154,15 @@ function updateMission(dt) {
     } else if (wp.kind === 'fleet') {
       const o = fleetObj(wp.id);
       if (o) { world = o.world.clone(); dist = fmtDist(o.world.length()); }
+    } else if (wp.kind === 'surf') {
+      const it = S.view && S.sysIndex === galaxy.novaTerra ? S.view.items.find((x) => x.body.special === 'nova') : null;
+      if (it) {
+        const b = it.body, pl = new THREE.Vector3(...wp.dir).normalize().multiplyScalar(b.radius);
+        const onIt = S.frame && S.frame.rot && S.frame.id === b.id;
+        const me = onIt ? (S.mode === 'foot' ? S.walker.pos : new THREE.Vector3(...S.frame.rel)) : null;
+        world = pl.clone().applyQuaternion(planetQuat(b)).add(it.world);
+        dist = fmtDist(me ? me.distanceTo(pl) : world.length());
+      }
     } else if (S.view) {
       const it = S.view.items.find((x) => x.body.id === wp.id);
       if (it) { world = it.world.clone(); dist = fmtDist(it.world.length() - it.body.radius); }
@@ -1982,7 +2190,12 @@ function targetMission() {
   if (wp.kind === 'body') setTargetBody(wp.id);
   else if (wp.kind === 'fleet') { if (fleetObj(wp.id)) setTargetFleet(wp.id); }
   else if (wp.kind === 'star') setTargetStar(wp.index);
-  else {
+  else if (wp.kind === 'surf') {
+    const nb = getSystem(galaxy, galaxy.novaTerra).planets.find((p) => p.special === 'nova');
+    if (S.surf && S.surf.item.body.special === 'nova') UI.msg('O ponto está marcado na tela: siga o marcador e pouse perto dele [P].', '', 'NAV', 7000);
+    else if (S.view && S.sysIndex === galaxy.novaTerra) setTargetBody(nb.id);
+    else setTargetStar(galaxy.novaTerra);
+  } else {
     // ponto no espaço (zona do sinal): escolhe a estrela alcançável que mais nos aproxima dele
     const g = shipGal();
     const cand = galaxy.within(g.x, g.y, g.z, jumpRange());
@@ -2422,6 +2635,7 @@ function onKeyDown(e) {
       else if (S.landed) disembark();
       break;
     case 'KeyJ': requestJump(); break;
+    case 'KeyB': placeBeacon(); break;
     case 'KeyF': requestScan(); break;
     case 'KeyG':
       if (S.mode === 'foot' || S.landed) break;
@@ -2474,17 +2688,7 @@ function epilogueTick() {
   UI.clearSubs();
   for (const [sp, t] of EPILOGUE) UI.say(sp, t, { prio: true, glitch: sp === '???' });
   audio.discovery();
-  setTimeout(() => {
-    const e = $('ending');
-    e.innerHTML = `<div class="pre" style="font-family:var(--title);letter-spacing:8px;font-size:12px;color:var(--hud-dim);margin-bottom:12px">ÚLTIMO HORIZONTE</div>
-      <h1>FIM DO CAPÍTULO I</h1>
-      <p>A Frota da Diáspora encontrou um lar. As Sombras deixaram a humanidade ficar — por enquanto.<br>O que era o Érebo? Por que a Terra? E quem mais está olhando?</p>
-      <div class="menu"><button class="btn big" id="end-cont">Continuar explorando</button><button class="btn" id="end-menu">Menu principal</button></div>`;
-    e.classList.remove('hidden');
-    $('end-cont').onclick = () => e.classList.add('hidden');
-    $('end-menu').onclick = () => toMenu();
-    save();
-  }, 42000);
+  save();
 }
 function loop(now) {
   requestAnimationFrame(loop);
@@ -2550,6 +2754,7 @@ function loop(now) {
       updateWarp(dt);
       if (!S.warp) updateAnchor(dt);
       updateScan(dt);
+      updateFootScan(dt);
       hazards(dt);
       updateShadow(dt);
       updateInteract(dt);
@@ -2558,6 +2763,7 @@ function loop(now) {
         storyT = 0.5;
         storyTick({ S, galaxy, fleet, say: (sp, txt, o) => { UI.say(sp, txt, o); audio.message(); }, inSystem: (i) => !!S.view && S.sysIndex === i }, 0.5);
         epilogueTick();
+        novaMissionTick();
       }
     }
     if (S.mode === 'foot' && S.walker && S.surf) footCamera();
@@ -2586,7 +2792,7 @@ function loop(now) {
   syncShipCam();
   // a lente troca o alvo de render: aí a profundidade da cena se perde e precisa ser limpa
   shipPass.clearDepth = lens.enabled;
-  sky.update(camera, shipGal(), S.view ? S.sysIndex : -1, daylight);
+  sky.update(camera, shipGal(), S.view ? S.sysIndex : -1, Math.max(daylight, atmosphereDaylight()));
   // efeitos de dobra
   warpFx.grp.visible = warpFx.level > 0.001;
   if (warpFx.grp.visible) {
@@ -2601,6 +2807,7 @@ function loop(now) {
   bloom.strength = 0.85 + warpFx.level * 0.3;
   if (st === 'play' || st === 'ending') updateHUD(dt);
   if (st === 'destroyed') cine.uniforms.uFog.value *= Math.exp(-dt);
+  if (S.ship) { const ud = S.ship.group.children[0].userData; fx.bakeShadow(renderer, scene, [...(ud.exhausts || []), ...(ud.discs || [])]); }
   composer.render(dt);
 }
 

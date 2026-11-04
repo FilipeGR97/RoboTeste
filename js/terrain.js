@@ -48,7 +48,7 @@ export function snoise(x, y, z) {
 }
 
 // PCG3D (inteiros de 32 bits) — idêntico ao hash33 do GLSL
-function pcg3d(x, y, z) {
+export function pcg3d(x, y, z) {
   x = (Math.imul(x, 1664525) + 1013904223) >>> 0; y = (Math.imul(y, 1664525) + 1013904223) >>> 0; z = (Math.imul(z, 1664525) + 1013904223) >>> 0;
   x = (x + Math.imul(y, z)) >>> 0; y = (y + Math.imul(z, x)) >>> 0; z = (z + Math.imul(x, y)) >>> 0;
   x = (x ^ (x >>> 16)) >>> 0; y = (y ^ (y >>> 16)) >>> 0; z = (z ^ (z >>> 16)) >>> 0;
@@ -145,6 +145,39 @@ function elevation(P, h, det) {
 }
 
 // ================================================================================================
+// Vegetação no ponto: campos, manchas de floresta e de flores (a mesma regra da cor assada na GPU,
+// para as árvores nascerem exatamente onde o chão é escuro de floresta)
+// ================================================================================================
+const VEG_LA = 1.8, VEG_LB = 0.5; // comprimentos de onda (km) das manchas de floresta
+const VA = [17.3, 5.9, 11.1], VB = [3.7, 21.5, 8.2];
+// teste barato (sem o relevo): false = não há chance de floresta aqui
+export function forestChance(P, dx, dy, dz) {
+  if (!(P.v.veg > 0)) return false;
+  const qx = dx * P.S + P.seed, qy = dy * P.S + P.seed, qz = dz * P.S + P.seed;
+  const moist = snoise(qx * 1.3 + 31, qy * 1.3 + 31, qz * 1.3 + 31) * 0.5 + 0.5;
+  if (moist < 0.22) return false;
+  const fa = P.R / VEG_LA, fb = P.R / VEG_LB;
+  const t = snoise(dx * fa + VA[0], dy * fa + VA[1], dz * fa + VA[2]) * 0.75 + snoise(dx * fb + VB[0], dy * fb + VB[1], dz * fb + VB[2]) * 0.25 + (moist - 0.55) * 1.2;
+  return t > -0.05;
+}
+export function vegAt(P, dx, dy, dz, h) {
+  const v = P.v;
+  const out = { vg: 0, forest: 0, flowers: 0, moist: 0, hl: 0, n1: 0, n2: 0 };
+  if (!(v.veg > 0) || h.water) return out;
+  const qx = dx * P.S + P.seed, qy = dy * P.S + P.seed, qz = dz * P.S + P.seed;
+  const moist = snoise(qx * 1.3 + 31, qy * 1.3 + 31, qz * 1.3 + 31) * 0.5 + 0.5;
+  const hl = Math.max(h.e / P.E, 0), lat = Math.abs(dy);
+  const vg = v.veg * smooth(0.22, 0.5, moist) * (1 - smooth(0.25, 0.55, hl)) * (1 - smooth(0.55, 0.8, lat));
+  out.moist = moist; out.hl = hl;
+  if (vg <= 0) return out;
+  const fa = P.R / VEG_LA, fb = P.R / VEG_LB;
+  const n1 = snoise(dx * fa + VA[0], dy * fa + VA[1], dz * fa + VA[2]), n2 = snoise(dx * fb + VB[0], dy * fb + VB[1], dz * fb + VB[2]);
+  const forest = vg * smooth(-0.05, 0.2, n1 * 0.75 + n2 * 0.25 + (moist - 0.55) * 1.2) * smooth(0.006, 0.02, hl);
+  out.vg = vg; out.forest = forest; out.flowers = vg * (1 - forest) * smooth(0.45, 0.7, n2); out.n1 = n1; out.n2 = n2;
+  return out;
+}
+
+// ================================================================================================
 // Cubo-esfera: 6 faces, coordenadas angulares (a, b) ∈ [-π/4, π/4] com mapeamento por tangente
 // ================================================================================================
 const FACES = [
@@ -164,7 +197,7 @@ export const TERRAIN_GLSL = /* glsl */ `
 // bases do ruído separadas em parte inteira (exata) e fração
 uniform vec3 uBW[3]; uniform vec3 uBF[16]; uniform vec3 uBR[14]; uniform vec3 uBI[3]; uniform vec3 uBD[12];
 uniform vec3 uBWi[3]; uniform vec3 uBFi[16]; uniform vec3 uBRi[14]; uniform vec3 uBIi[3]; uniform vec3 uBDi[12];
-uniform vec3 uBC[4]; uniform vec3 uBL[3];
+uniform vec3 uBC[4]; uniform vec3 uBL[3]; uniform vec3 uBV[2]; uniform vec3 uBVi[2]; uniform float uFA, uFB;
 uniform vec3 uCI[3]; uniform vec3 uCF[3]; // crateras: célula inteira (float exato; o three.js não achata arrays ivec3) + fração
 uniform vec3 uC, uPc, uU, uV;
 uniform float uLen, uA0, uB0, uHs, uCosA0, uCosB0;
@@ -338,14 +371,22 @@ void main(){
     col = mix(col, cMid, smoothstep(0.1, 0.4, hl + (moist - 0.5) * 0.25));
     col = mix(col, cHigh, smoothstep(0.4, 0.75, hl + detail * 0.05));
     vg = uVeg * smoothstep(0.22, 0.5, moist) * (1.0 - smoothstep(0.25, 0.55, hl)) * (1.0 - smoothstep(0.55, 0.8, lat));
+    // manchas de floresta e de flores (mesma regra do vegAt em JS, onde nascem as árvores)
+    float n1 = snoiseS(uBVi[0], uBV[0] + dd * uFA), n2 = snoiseS(uBVi[1], uBV[1] + dd * uFB);
+    float fo = vg * smoothstep(-0.05, 0.2, n1 * 0.75 + n2 * 0.25 + (moist - 0.55) * 1.2) * smoothstep(0.006, 0.02, hl);
+    float flw = vg * (1.0 - fo) * smoothstep(0.45, 0.7, n2);
     vec3 grass = cVeg * 1.6 + vec3(0.05, 0.04, 0.0);
-    vec3 forest = cVeg * 0.55;
-    col = mix(col, mix(grass, forest, smoothstep(0.5, 0.72, moist + fine * 0.15)), vg);
+    grass = mix(grass, grass * vec3(1.18, 1.05, 0.62), smoothstep(0.38, 0.22, moist)); // campos mais secos
+    col = mix(col, grass, vg);
+    col = mix(col, mix(vec3(0.95, 0.82, 0.32), vec3(0.78, 0.5, 0.9), step(0.0, n1)), flw * 0.3);
+    // dossel: copas escuras, salpicadas de sombra entre as árvores
+    vec3 canopy = mix(cVeg * 0.5, vec3(0.1, 0.08, 0.04), 0.25) * (0.7 + 0.6 * clamp(fine + 0.5, 0.0, 1.0));
+    col = mix(col, canopy, fo * 0.95);
     col *= 0.88 + 0.24 * detail;
     float slope = 1.0 - dot(N, n);
     col = mix(col, mix(cHigh, cMid, 0.4) * 0.8, smoothstep(0.12, 0.3, slope) * 0.8); // rocha exposta nas encostas
     col *= 0.72 + 0.56 * clamp(fine * 0.8 + 0.5, 0.0, 1.0);
-    col = mix(col, mix(cBeach, cMid, 0.5) * 0.85, smoothstep(0.25, 0.6, fine) * vg * 0.6); // clareiras de solo entre a vegetação
+    col = mix(col, mix(cBeach, cMid, 0.5) * 0.85, smoothstep(0.25, 0.6, fine) * vg * 0.6 * (1.0 - fo)); // clareiras de solo entre a vegetação
   }
   float iceN = lat + snoise(uBC[3] + dq * 3.0) * 0.06 + max(hs, 0.0) * 0.35;
   col = mix(col, cSnow, smoothstep(uIceLat - 0.03, uIceLat + 0.03, iceN));
@@ -432,6 +473,10 @@ void main(){
     float spec = pow(max(dot(Nw, H), 0.0), 400.0) * 6.0;
     vec3 body = alb.rgb * (ndl * 0.8 + 0.2) * horizon;
     col = mix(body * uSunI * 0.78, uSkyCol * uDay, fres) + uSunCol * spec * uSunI * horizon + alb.rgb * lamp(Nw);
+    // espuma: ondas quebrando na beira (água rasa, poucos metros)
+    float ew = texelFetch(tElev, ivec2(vUv * 131.0), 0).r;
+    float foam = smoothstep(-0.01, -0.0008, ew) * smoothstep(0.35, 0.9, 0.5 + 0.5 * sin(uTime * 1.4 - ew * 2200.0 + w.x * 5.0));
+    col = mix(col, vec3(0.85, 0.9, 0.92) * (max(dot(up, L), 0.0) * uSunI * 0.9 + 0.08) * horizon, foam * 0.75);
   } else {
     vec3 N = normalize(uNM * (nt.rgb * 2.0 - 1.0));
     float diff = max(dot(N, L), 0.0) * horizon;
@@ -628,6 +673,8 @@ export class PlanetSurface {
       uBRi: { value: Array.from({ length: NR }, () => new THREE.Vector3()) }, uBIi: { value: Array.from({ length: 3 }, () => new THREE.Vector3()) },
       uBDi: { value: Array.from({ length: ND }, () => new THREE.Vector3()) }, uBC: { value: Array.from({ length: 4 }, () => new THREE.Vector3()) },
       uBL: { value: Array.from({ length: 3 }, () => new THREE.Vector3()) },
+      uBV: { value: [new THREE.Vector3(), new THREE.Vector3()] }, uBVi: { value: [new THREE.Vector3(), new THREE.Vector3()] },
+      uFA: { value: P.R / VEG_LA }, uFB: { value: P.R / VEG_LB },
       uCI: { value: [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()] }, uCF: { value: Array.from({ length: 3 }, () => new THREE.Vector3()) },
       uC: { value: new THREE.Vector3() }, uPc: { value: new THREE.Vector3() }, uU: { value: new THREE.Vector3() }, uV: { value: new THREE.Vector3() },
       uLen: { value: 1 }, uA0: { value: 0 }, uB0: { value: 0 }, uHs: { value: 1 }, uCosA0: { value: 1 }, uCosB0: { value: 1 },
@@ -671,6 +718,7 @@ export class PlanetSurface {
     for (let k = 0, f = P.Sd; k < ND; k++, f *= 2) { const o = DET_OFF(k); split(u.uBDi.value[k], u.uBD.value[k], cx * f + o[0], cy * f + o[1], cz * f + o[2]); }
     [[1.3, 31], [14, 0], [40, 0], [3, 0]].forEach(([m, o], k) => set(u.uBC.value[k], Q[0] * m + o, Q[1] * m + o, Q[2] * m + o));
     [[1.6, 7], [5, 0], [17, 3]].forEach(([m, o], k) => set(u.uBL.value[k], Q[0] * m + o, Q[1] * m + o, Q[2] * m + o));
+    [[P.R / VEG_LA, VA], [P.R / VEG_LB, VB]].forEach(([f, o], k) => split(u.uBVi.value[k], u.uBV.value[k], cx * f + o[0], cy * f + o[1], cz * f + o[2]));
     [[3, 1], [9, 1.7], [27, 2.3]].forEach(([m, s], k) => {
       const B = [cx * m + P.seed * s, cy * m + P.seed * s, cz * m + P.seed * s];
       const I = B.map(Math.floor);
@@ -846,14 +894,11 @@ export class GroundDetail {
     this.group.add(this.rocks);
     this.life = item.body.life;
     if (this.life === 'complexa') {
+      // as árvores ficam em flora.js (Forest); aqui só os arbustos baixos
       const vc = new THREE.Color(v.vegColor);
-      const trunk = new THREE.CylinderGeometry(0.06, 0.1, 1, 6); trunk.translate(0, 0.5, 0);
-      const crown = new THREE.IcosahedronGeometry(0.55, 0); crown.translate(0, 1.15, 0);
-      this.trunks = new THREE.InstancedMesh(trunk, new THREE.MeshStandardMaterial({ color: 0x3a2a1e, roughness: 1 }), 500);
-      this.crowns = new THREE.InstancedMesh(crown, new THREE.MeshStandardMaterial({ color: vc.clone().multiplyScalar(1.3), roughness: 0.9, flatShading: true }), 500);
-      const bush = new THREE.IcosahedronGeometry(0.5, 0); bush.scale(1, 0.6, 1);
+      const bush = new THREE.IcosahedronGeometry(0.5, 1); bush.scale(1, 0.6, 1);
       this.bushes = new THREE.InstancedMesh(bush, new THREE.MeshStandardMaterial({ color: vc.clone().multiplyScalar(1.1), roughness: 1, flatShading: true }), 900);
-      for (const m of [this.trunks, this.crowns, this.bushes]) { m.frustumCulled = false; this.group.add(m); }
+      this.bushes.frustumCulled = false; this.group.add(this.bushes);
     }
     this.center = null;
   }
@@ -892,12 +937,7 @@ export class GroundDetail {
       pos.copy(d).multiplyScalar(R + hh.e).sub(base);
       q.setFromUnitVectors(Y, d);
       const kind = this.life === 'complexa' ? h2[0] : 1;
-      if (kind < 0.12 && nt < 500) {
-        const sz = 0.004 + h2[1] * 0.012;
-        s.set(sz, sz * (0.8 + h2[2] * 0.6), sz);
-        m.compose(pos, q, s);
-        this.trunks.setMatrixAt(nt, m); this.crowns.setMatrixAt(nt, m); nt++;
-      } else if (kind < 0.45 && nb < 900) {
+      if (kind < 0.45 && nb < 900) {
         const sz = 0.0006 + h2[1] * 0.0014;
         s.set(sz, sz, sz); m.compose(pos, q, s); this.bushes.setMatrixAt(nb++, m);
       } else if (nr < this.N) {
@@ -909,10 +949,7 @@ export class GroundDetail {
       }
     }
     this.rocks.count = nr; this.rocks.instanceMatrix.needsUpdate = true;
-    if (this.trunks) {
-      this.trunks.count = nt; this.crowns.count = nt; this.bushes.count = nb;
-      for (const x of [this.trunks, this.crowns, this.bushes]) x.instanceMatrix.needsUpdate = true;
-    }
+    if (this.bushes) { this.bushes.count = nb; this.bushes.instanceMatrix.needsUpdate = true; }
   }
 
   dispose() {
@@ -1028,6 +1065,7 @@ export class LifeDetail {
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), pos = new THREE.Vector3(), Y = new THREE.Vector3(0, 1, 0);
     const seen = new Set();
     let ng = 0, nf = 0;
+    this.flowerPts = [];
     const FL = [new THREE.Color(1, 0.85, 0.3), new THREE.Color(0.95, 0.4, 0.55), new THREE.Color(0.85, 0.85, 1), new THREE.Color(0.7, 0.4, 1)];
     for (let i = -n0; i <= n0; i++) for (let j = -n0; j <= n0; j++) {
       d.copy(up).addScaledVector(e1, (i * cell) / R).addScaledVector(e2, (j * cell) / R).normalize();
@@ -1048,6 +1086,7 @@ export class LifeDetail {
         const sz = 0.00007 + h1[1] * 0.00006;
         s.set(sz, sz, sz); m.compose(pos.clone().addScaledVector(d, 0.00025), q, s);
         this.flowers.setMatrixAt(nf, m); this.flowers.setColorAt(nf, FL[Math.floor(h1[1] * 4) % 4]); nf++;
+        if (nf % 4 === 0) this.flowerPts.push(pos.clone().add(base));
       } else if (ng < 3200) {
         const sz = 0.0004 + h1[1] * 0.0005;
         s.set(sz * 1.3, sz, sz * 1.3); m.compose(pos, q, s);
@@ -1071,12 +1110,16 @@ export class LifeDetail {
     const hf = this.frameAt(this.herdCenter);
     const base = this.group.position;
     const Y = new THREE.Vector3(0, 1, 0);
+    const px = dir.dot(hf.e1) * R, pz = dir.dot(hf.e2) * R;
     for (const c of this.creatures) {
+      const fx = c.x - px, fz = c.z - pz, fd = Math.hypot(fx, fz);
+      if (fd < 0.018 && !c.flee) { c.flee = 1; c.tx = c.x + (fx / fd) * 0.03; c.tz = c.z + (fz / fd) * 0.03; c.wait = 0; }
+      if (c.flee && Math.hypot(c.tx - c.x, c.tz - c.z) < 0.001) c.flee = 0;
       if (c.wait > 0) c.wait -= dt;
       else {
         const dx = c.tx - c.x, dz = c.tz - c.z, L = Math.hypot(dx, dz);
         if (L < 0.0005) { c.tx = (Math.random() - 0.5) * 0.04; c.tz = (Math.random() - 0.5) * 0.04; c.wait = 3 + Math.random() * 8; }
-        else { const sp = 0.0011 * dt; c.x += (dx / L) * Math.min(sp, L); c.z += (dz / L) * Math.min(sp, L); c.heading = Math.atan2(dx, dz); }
+        else { const sp = (c.flee ? 0.006 : 0.0011) * dt; c.x += (dx / L) * Math.min(sp, L); c.z += (dz / L) * Math.min(sp, L); c.heading = Math.atan2(dx, dz); }
       }
       const d = hf.up.clone().addScaledVector(hf.e1, c.x / R).addScaledVector(hf.e2, c.z / R).normalize();
       const g = this.ground(d);
