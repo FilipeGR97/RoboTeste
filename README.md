@@ -21,5 +21,6 @@ Não precisa instalar nada além disso: o Three.js já está em `lib/`.
 - `js/novaterra.js` — Nova Terra: fauna, noite, chuva, a sonda Vigia-7, o Santuário e o pouso da Aurora
 - `js/audio.js` — trilha procedural (três peças que se revezam), ambiência e efeitos
 - `js/fleet.js`, `js/story.js`, `js/missions.js` — frota, história e missões
+- `js/economy.js` — créditos e materiais, melhorias, hangar, pintura e contratos da frota
 - `js/map.js` — mapa galáctico e catálogo de exoplanetas
 - `musica/` — coloque aqui uma trilha própria (veja `LEIA-ME.txt`)

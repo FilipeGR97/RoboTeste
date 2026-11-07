@@ -288,6 +288,27 @@ code { color: #fff; background: rgba(255, 255, 255, 0.08); padding: 1px 5px; bor
 #toast.warn { border-left-color: var(--warn); color: #ffe6c0; }
 #wmarker::after { content: 'OBJETIVO'; position: absolute; top: -26px; left: 0; transform: translateX(-50%); font-family: var(--title); font-size: 9px; letter-spacing: 3px; color: #5ce1ff; }
 .blabel.fleet { color: #ffd27a; } .blabel.shadow { color: #c49bff; }
+/* oficina e contratos */
+#shop { right: 3vw; top: 50%; transform: translateY(-50%); width: min(560px, 46vw); }
+#ctPanel { left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(760px, 94vw); }
+#shop .res { display: flex; gap: 22px; font-size: 16px; margin: 0 0 12px; color: #cfe6f8; }
+#shop .res b { font-family: var(--title); color: #fff; }
+.panel .tabs { display: flex; gap: 6px; margin: 4px 0 10px; }
+.panel .tab { background: none; border: 1px solid var(--hud-faint); color: var(--hud-dim); font-family: var(--title); letter-spacing: 3px; font-size: 11px; padding: 7px 14px; cursor: pointer; }
+.panel .tab.on { color: #fff; border-color: #8fd0ff; background: rgba(120, 200, 255, 0.14); }
+.panel .item { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 10px 0; border-bottom: 1px solid var(--hud-faint); font-size: 15px; }
+.panel .item small { color: #a9c3d8; }
+.panel .item .col { display: flex; flex-direction: column; gap: 6px; }
+.panel .item .good, .panel small.good { color: #8affc0; }
+.panel .btn.off { opacity: 0.4; }
+.panel .pips i { display: inline-block; width: 14px; height: 5px; margin-right: 3px; background: rgba(140, 200, 255, 0.18); }
+.panel .pips i.on { background: #8fd0ff; }
+.panel .sws { display: flex; flex-wrap: wrap; gap: 8px; }
+.panel .sw { width: 34px; height: 34px; border: 2px solid rgba(255, 255, 255, 0.2); cursor: pointer; }
+.panel .sw.on { border-color: #fff; box-shadow: 0 0 10px rgba(140, 210, 255, 0.8); }
+.panel .row { display: flex; gap: 10px; align-items: center; }
+.panel input#shop-name { background: #0a1520; color: #fff; border: 1px solid var(--hud-dim); padding: 6px 10px; font-family: var(--title); letter-spacing: 2px; text-transform: uppercase; }
+#shop .body { max-height: 52vh; overflow-y: auto; padding-right: 6px; }
 #storyPanel { left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(680px, 92vw); font-size: 17px; line-height: 1.55; }
 #storyPanel .entry { margin: 12px 0; } #storyPanel .entry b { font-family: var(--title); font-size: 11px; letter-spacing: 3px; color: #ff9a7a; display: block; margin-bottom: 3px; }
 /* ---------- mapa: catálogo de exoplanetas ---------- */

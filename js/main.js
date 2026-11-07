@@ -10,7 +10,8 @@ import { getSystem, bodyPosition, TYPE_NAME } from './system.js';
 import { SystemView, spinAngle } from './bodies.js';
 import { PlanetSurface, GroundDetail, LifeDetail, heightAt, vegAt, terrainParams } from './terrain.js';
 import { Sky } from './sky.js';
-import { SHIPS, buildShip, setShipScale } from './ships.js';
+import { SHIPS, buildShip, setShipScale, shipById } from './ships.js';
+import { newEconomy, fixEconomy, shipWithUpgrades, damageMul, heatMul, scanMul, drillMul, canPay, pay, gain, costTxt, UPGRADES, UPG_COST, SHIP_COST, PAINT_COST, makeOffers, contractMission, propModel } from './economy.js';
 import { AudioEngine } from './audio.js';
 import { GalaxyMap } from './map.js';
 import { CinematicShader, SanitizeShader, tunnelMaterial, streakMaterial, LensShader, dustMaterial } from './shaders.js';
@@ -311,6 +312,7 @@ function loadSystem(i, announce = true) {
   // e a checagem de perigo do mesmo quadro "via" a nave dentro do horizonte de um buraco negro
   S.view.update(S.t, S.local, camera, H);
   S.fv = new FleetView(scene, S.view, fleet, S);
+  addContractProps();
   S.view.showOrbits = S.showOrbits;
   for (const b of sys.bodies) if (S.scanned[b.id]) b.scannedScore = S.scanned[b.id].score;
   S.sysIndex = i;
@@ -536,9 +538,17 @@ function bump(ms, o) {
 // ------------------------------------------------------------------------------------------------
 let holdT = 0;
 function interactable() {
+  if (S.mode !== 'ship') return null;
+  if (S.landed && S.surf && !S.landed.water) {
+    const f = S.flags, b = S.surf.item.body;
+    if (b.special === 'nova' && f.auroraLanded && f.auroraDir && new THREE.Vector3(...S.landed.rel).distanceTo(new THREE.Vector3(...f.auroraDir).multiplyScalar(b.radius)) < 5) return { label: 'Oficina da colônia', dur: 1, act: () => openWorkshop('colonia') };
+    return { label: 'Perfurar o solo (minério)', dur: S.shipDef.drill ? 3.5 : 5, act: drill };
+  }
   const nf = nearestFleet();
-  if (!nf || nf.d > 30 || S.mode !== 'ship') return null;
+  if (!nf || nf.d > 30) return null;
   const o = nf.o;
+  if (o.prop) return { o, label: o.prop === 'rescue' ? `Acoplar a cápsula ${o.name}` : 'Rebocar o contêiner', dur: 3, act: () => propDone(o) };
+  if (o.id === 'esperanca' && o.state === 'ok') return { o, label: 'Atracar na Esperança (oficina)', dur: 1.2, act: () => { chatFleet(o); openWorkshop('esperanca'); } };
   if (o.id === 'iara' && o.state === 'socorro') return { o, label: 'Transferir energia para a Iara', dur: 3.5, act: rescueIara };
   if (o.id === 'tupa' && !S.flags.tupaLog) return { o, label: 'Ler o registro de bordo da Tupã', dur: 2.5, act: readTupa };
   if (o.def && o.state === 'ok') return { o, label: `Falar com ${o.def.ia}`, dur: 0.6, act: () => chatFleet(o) };
@@ -562,6 +572,7 @@ function updateInteract(dt) {
 function rescueIara(o) {
   S.flags.iaraSaved = true;
   o.state = 'ok';
+  reward({ cr: 500, metal: 10 }, 'resgate da Iara');
   if (o.beacon) o.beacon.visible = false;
   audio.discovery();
   UI.say('MAÍRA', 'Núcleo religado! Obrigada, comandante. Estou mandando nossa célula de dobra reserva para vocês.', { prio: true });
@@ -577,6 +588,7 @@ function rescueIara(o) {
 }
 function readTupa() {
   S.flags.tupaLog = true;
+  reward({ cr: 300 }, 'registro da Tupã');
   S.flags.lockT = Math.max(S.flags.lockT || 0, 12);
   audio.scanDone();
   UI.storyPanel('Registro de bordo — Tupã · IA ARANDU', TUPA_LOG, () => {
@@ -635,6 +647,8 @@ function updatePrompts(dt) {
     if (S.surf && S.surf.item.body.special === 'nova' && S.flags.sanctRead && !S.flags.beaconDir) L.push({ k: 'B', t: 'Fincar o sinalizador da Aurora' });
   } else if (S.landed) {
     if (!S.landed.water) L.push({ k: 'E', t: 'Desembarcar' });
+    const it = interactable();
+    if (it) L.push({ k: 'R', t: it.label, hold: true });
     L.push({ k: 'W', t: 'Decolar · [Espaço] subir na vertical' });
   } else if (!S.warp) {
     const it = interactable();
@@ -778,7 +792,7 @@ function targetInfo() {
     if (!o) { S.target = null; return null; }
     return {
       name: o.name, world: o.world.clone(), dist: Math.max(o.gap, 0), fleet: o,
-      type: o.shadow ? 'Desconhecido · origem: Érebo' : `Frota da Diáspora · IA ${o.def.ia}${o.state === 'socorro' ? ' · SOCORRO' : o.state === 'destroco' ? ' · destroços' : ''}`,
+      type: o.prop ? (o.prop === 'rescue' ? 'Cápsula de fuga · SOCORRO' : 'Contêiner de carga') : o.shadow ? 'Desconhecido · origem: Érebo' : `Frota da Diáspora · IA ${o.def.ia}${o.state === 'socorro' ? ' · SOCORRO' : o.state === 'destroco' ? ' · destroços' : ''}`,
     };
   }
   if (S.target.kind === 'body') {
@@ -1089,6 +1103,7 @@ function holdLanded() {
 // Casco, perigos e destruição
 // ------------------------------------------------------------------------------------------------
 function damage(pct) {
+  if (S.eco) pct *= damageMul(S.eco, S.shipDef);
   S.hull = Math.max(0, S.hull - pct);
   S.dmgT = 0;
   if (S.hull <= 0) destroyShip(S.lastCause || 'O casco cedeu.');
@@ -1105,7 +1120,7 @@ function hazards(dt) {
   if (ds < 1.02) return destroyShip(`A nave mergulhou na fotosfera de ${st.name}, a ${fmtNum(st.temp, 0)} K.`);
   if (ds < 5) {
     const Th = st.temp * Math.sqrt(1 / (2 * ds));
-    rate += 30 * (5 - ds) / 4; warn = `TEMPERATURA DO CASCO ${fmtNum(Th - 273, 0)} °C`; S.lastCause = `O calor de ${st.name} derreteu o casco.`;
+    rate += (30 * (5 - ds) / 4) / heatMul(S.eco); warn = `TEMPERATURA DO CASCO ${fmtNum(Th - 273, 0)} °C`; S.lastCause = `O calor de ${st.name} derreteu o casco.`;
   }
   // buraco negro
   const bh = S.view.bh;
@@ -1134,7 +1149,7 @@ function hazards(dt) {
     }
     // reentrada: acima do limite seguro de velocidade para a densidade do ar
     if (env.rho > 1e-4 && !S.landed) {
-      const vSafe = Math.max(0.3 / Math.sqrt(env.rho), 0.05);
+      const vSafe = Math.max(0.3 / Math.sqrt(env.rho), 0.05) * heatMul(S.eco);
       const k = S.speed / vSafe;
       heat = clamp((k - 1.05) / 1.5, 0, 1) * clamp(env.rho * 30, 0.2, 1);
       if (k > 2.2) { rate += (k - 2.2) * 9; warn = 'REENTRADA — CASCO SUPERAQUECIDO'; S.lastCause = `A nave se desintegrou na reentrada a ${fmtNum(S.speed, 1)} km/s.`; }
@@ -1361,7 +1376,7 @@ function updateFootScan(dt) {
     const first = !f.catalog[fs.id];
     f.catalog[fs.id] = true;
     UI.msg(`${sp.nome} — ${sp.desc}`, 'good', first ? 'NOVA ESPÉCIE' : 'CATÁLOGO', 12000);
-    audio.scanDone(); if (first) audio.discovery();
+    audio.scanDone(); if (first) { audio.discovery(); reward({ cr: 120 }, 'catálogo'); }
   }
   save();
 }
@@ -1420,8 +1435,173 @@ function chapterEnd() {
   audio.discovery();
   save();
 }
+// ---------------------------------------------------------------- economia: recompensas, perfuração, oficina, contratos
+function reward(r, why) {
+  if (!S.eco) return;
+  gain(S.eco, r);
+  const t = [r.cr ? `+${fmtNum(r.cr, 0)} CR` : '', r.metal ? `+${r.metal} metal` : '', r.cristal ? `+${r.cristal} cristal` : ''].filter(Boolean).join(' · ');
+  if (t) UI.msg(`${t}${why ? ' — ' + why : ''}`, 'good', 'RECURSOS', 5000);
+}
+// perfuração com a nave pousada: minério conforme o tipo de mundo; cada ponto só rende uma vez
+function drill() {
+  const b = S.surf.item.body, f = S.flags;
+  if (b.special === 'nova') { UI.say('LUMEN', 'Aqui não, comandante. Não vamos começar o novo lar abrindo buracos nele.'); return; }
+  const here = new THREE.Vector3(...S.landed.rel).normalize();
+  const key = 'd:' + b.id, list = (S.eco.mined[key] = S.eco.mined[key] || []);
+  if (list.some((d) => here.distanceTo(new THREE.Vector3(...d)) * b.radius < 1.5)) { UI.msg('Este ponto já foi perfurado. Voe ao menos 1,5 km e pouse de novo.', 'warn'); audio.alert(); return; }
+  list.push(here.toArray()); if (list.length > 80) list.shift();
+  const rich = { vulcanico: 1.6, rochoso: 1.3, deserto: 1.1, gelo: 0.7 }[b.type] || 1;
+  const k = drillMul(S.eco, S.shipDef);
+  const metal = Math.round((8 + Math.random() * 10) * rich * k);
+  const cch = { vulcanico: 0.45, gelo: 0.3, lava: 0.5 }[b.type] || 0.1;
+  const cristal = Math.random() < cch ? Math.max(1, Math.round(k)) : 0;
+  audio.thud(0.5); setTimeout(() => audio.thud(0.3), 400);
+  reward({ metal, cristal }, `perfuração em ${b.name}`);
+  void f;
+  save();
+}
+let shopTab = 'sys', shopHere = 'esperanca';
+function openWorkshop(here) {
+  shopHere = here; shopTab = 'sys';
+  S.prevState = S.state; S.state = 'workshop';
+  closePanels(); $('hud').classList.add('hidden'); $('labels').classList.add('hidden');
+  if (document.pointerLockElement) document.exitPointerLock();
+  preview.cam.setViewOffset(W, H, W * 0.2, 0, W, H); // a nave fica à esquerda do painel
+  workshopModel();
+  renderShop();
+  audio.message();
+  refreshOffers(true);
+}
+function workshopModel() {
+  if (preview.model) preview.scene.remove(preview.model.group);
+  const m = buildShip(S.shipDef);
+  setShipScale(m.group, 1 / m.meters, m.meters);
+  preview.scene.add(m.group);
+  preview.model = m;
+}
+function closeWorkshop() {
+  $('shop').classList.add('hidden'); $('ctPanel').classList.add('hidden');
+  preview.cam.setViewOffset(W, H, -W * 0.17, 0, W, H);
+  $('hud').classList.toggle('hidden', !!S.hudHidden); $('labels').classList.toggle('hidden', !!S.hudHidden);
+  S.state = 'play';
+  blurUI();
+  save();
+}
+// troca a nave em uso (mesma posição), com melhorias, pintura e nome
+function rebuildShip() {
+  const base = shipById(S.shipDef.id);
+  S.shipDef = shipWithUpgrades(base, S.eco);
+  const old = S.ship;
+  S.ship = buildShip(S.shipDef);
+  S.ship.group.traverse((o) => o.layers.set(SHIP_LAYER));
+  if (old) { scene.remove(old.group); S.ship.group.position.copy(old.group.position); S.ship.group.quaternion.copy(old.group.quaternion); }
+  scene.add(S.ship.group);
+  workshopModel();
+}
+function renderShop() { UI.shop(S, shopTab, shopHere, shopAct); }
+function shopAct(a, v) {
+  const e = S.eco;
+  audio.click();
+  if (a === 'close') return closeWorkshop();
+  if (a === 'contracts') return toggleContracts();
+  if (a === 'tab') shopTab = v;
+  else if (a === 'upg') {
+    const c = UPG_COST[e.upg[v]];
+    if (!c || !canPay(e, c)) { UI.msg(c ? `Faltam recursos: ${costTxt(c)}.` : 'Já está no nível máximo.', 'warn'); audio.alert(); }
+    else { pay(e, c); e.upg[v]++; S.shipDef = shipWithUpgrades(shipById(S.shipDef.id), e); audio.scanDone(); UI.msg(`${UPGRADES.find((u) => u.id === v).nome}: nível ${e.upg[v]}.`, 'good', 'OFICINA'); }
+  } else if (a === 'base' || a === 'accent' || a === 'name') {
+    if (e.cr < PAINT_COST) { UI.msg(`A pintura custa ${PAINT_COST} CR.`, 'warn'); audio.alert(); }
+    else {
+      const p = (e.paint[S.shipDef.id] = { ...(e.paint[S.shipDef.id] || {}) });
+      if (a === 'name') { const n = ($('shop-name').value || '').trim().toUpperCase().slice(0, 14); if (!n) return; p.name = n; } else p[a] = v;
+      e.cr -= PAINT_COST;
+      rebuildShip();
+    }
+  } else if (a === 'buy') {
+    const c = SHIP_COST[v];
+    if (!canPay(e, c)) { UI.msg(`Faltam recursos: ${costTxt(c)}.`, 'warn'); audio.alert(); }
+    else { pay(e, c); e.owned.push(v); UI.msg(`${shipById(v).nome} adicionada ao hangar.`, 'good', 'OFICINA'); audio.discovery(); S.shipDef = { ...S.shipDef, id: v }; rebuildShip(); S.hull = 100; }
+  } else if (a === 'use') { S.shipDef = { ...S.shipDef, id: v }; rebuildShip(); S.hull = 100; UI.msg(`Agora pilotando a ${S.shipDef.nome}.`, 'good', 'OFICINA'); }
+  renderShop();
+  save();
+}
+// ---- contratos
+function refreshOffers(force = false) {
+  const C = S.eco.contracts;
+  if (force && S.stats.time - C.at < 120 && C.offers.length) return;
+  if (!force && C.offers.length && S.stats.time - C.at < 480) return;
+  C.offers = makeOffers(galaxy, S, shipGal(), jumpRange());
+  C.at = S.stats.time;
+}
+function toggleContracts() {
+  const p = $('ctPanel');
+  if (!p.classList.contains('hidden')) { p.classList.add('hidden'); return; }
+  refreshOffers();
+  UI.contracts(S, S.eco.contracts.offers, contractAct);
+  audio.click();
+}
+function contractAct(a, id) {
+  const C = S.eco.contracts;
+  audio.click();
+  if (a === 'take') {
+    if (C.active.length >= 3) { UI.msg('Já há 3 contratos em andamento.', 'warn'); return; }
+    const k = C.offers.findIndex((c) => c.id === id);
+    if (k < 0) return;
+    const c = C.offers.splice(k, 1)[0];
+    c.before = Object.keys(S.scanned);
+    C.active.push(c); C.track = c.id;
+    if (S.view && S.sysIndex === c.star) addContractProps();
+    UI.msg(`Contrato aceito: ${c.title}.`, 'good', 'FROTA');
+  } else if (a === 'drop') { C.active = C.active.filter((c) => c.id !== id); if (C.track === id) C.track = null; if (S.fv) S.fv.remove('ct' + id); }
+  else if (a === 'track') C.track = C.track === id ? null : id;
+  mission = null;
+  UI.contracts(S, C.offers, contractAct);
+  save();
+}
+function addContractProps() {
+  if (!S.fv || !S.eco) return;
+  let k = 0;
+  for (const c of S.eco.contracts.active) {
+    if (c.star !== S.sysIndex || (c.type !== 'salvage' && c.type !== 'rescue') || S.fv.find('ct' + c.id)) continue;
+    const anchor = S.view.sys.planets.find((p) => p.id === c.anchor) || S.view.sys.planets[0];
+    S.fv.addProp('ct' + c.id, propModel(c.type), anchor, c.type === 'rescue' ? c.pod : 'Contêiner', c.type, c.type === 'rescue' ? '#ff5040' : '#60ff90', k++);
+  }
+}
+function propDone(o) {
+  const c = S.eco.contracts.active.find((x) => 'ct' + x.id === o.id);
+  S.fv.remove(o.id);
+  if (S.target && S.target.id === o.id) S.target = null;
+  if (c && c.type === 'rescue') UI.say('LUMEN', `Cápsula ${c.pod} acoplada. Duas pessoas a bordo, desidratadas, mas vivas. Vão seguir com a frota.`);
+  if (c) completeContract(c);
+}
+function completeContract(c) {
+  const C = S.eco.contracts;
+  if (!C.active.includes(c)) return;
+  C.active = C.active.filter((x) => x !== c);
+  if (C.track === c.id) C.track = C.active.length ? C.active[0].id : null;
+  S.eco.done++;
+  UI.say('ATLAS', `Contrato cumprido: ${c.title}. O pagamento já está na sua conta, comandante.`);
+  reward(c.reward, 'contrato');
+  audio.discovery();
+  mission = null;
+  save();
+}
+function contractsTick() {
+  if (!S.eco) return;
+  for (const c of S.eco.contracts.active.slice()) {
+    if (c.type !== 'scan') continue;
+    const n = Object.keys(S.scanned).filter((id) => S.scanned[id].system === c.starName && !(c.before || []).includes(id)).length;
+    if (n >= c.n) completeContract(c);
+  }
+}
+
 function sampleGround() {
   const b = S.surf.item.body;
+  const here = S.walker.pos.clone().normalize();
+  const key = 's:' + b.id, list = (S.eco.mined[key] = S.eco.mined[key] || []);
+  const fresh = !list.some((d) => here.distanceTo(new THREE.Vector3(...d)) * b.radius < 0.03);
+  if (fresh) { list.push(here.toArray()); if (list.length > 60) list.shift(); reward({ metal: 2 + Math.floor(Math.random() * 3), cristal: Math.random() < 0.05 ? 1 : 0 }, 'amostra'); }
+  for (const c of S.eco.contracts.active.filter((x) => x.type === 'sample' && x.planet === b.id)) completeContract(c);
   const f = b.finds && b.finds.length ? b.finds[Math.floor(Math.random() * b.finds.length)] : null;
   const soil = b.type === 'gelo' ? 'gelo de água misturado a poeira' : b.type === 'deserto' || b.type === 'deserto_frio' ? 'areia fina rica em óxido de ferro' : b.life === 'complexa' ? 'solo orgânico, cheio de raízes' : 'rocha basáltica e regolito';
   UI.msg(`Amostra coletada: ${soil}.${f ? ' Relacionado: ' + f.toLowerCase() + '.' : ''}`, 'good', 'TRAJE', 9000);
@@ -1735,7 +1915,7 @@ function arrive() {
 // ------------------------------------------------------------------------------------------------
 // Scanner
 // ------------------------------------------------------------------------------------------------
-function scanRange(b) { return Math.max(b.radius * 150, 200000); }
+function scanRange(b) { return Math.max(b.radius * 150, 200000) * (S.eco ? scanMul(S.eco) : 1); }
 
 function requestScan() {
   if (S.mode === 'foot') { footScanStart(); return; }
@@ -1788,6 +1968,8 @@ function updateScan(dt) {
     if (b.special === 'terra') S.flags.scannedTerra = true;
     else if (b.body === 'bh') S.flags.bhScanned = true;
     else if (S.sysIndex !== 0) S.flags.scannedExo = true;
+    if (first) reward(b.body === 'bh' ? { cr: 600, cristal: 3 } : { cr: Math.round(40 + b.hab.score * 2) }, `dados de ${b.name}`);
+    if (b.body === 'bh') for (const c of S.eco.contracts.active.filter((x) => x.type === 'bh' && x.star === S.sysIndex)) completeContract(c);
     if (b.body === 'bh') UI.bhPanel(b, sc.it.world.length());
     else UI.scanPanel(b, star, remarkFor(b, star));
     audio.scanDone();
@@ -2019,6 +2201,7 @@ function updateHUD(dt) {
     }
     UI.setText('h-ship', S.shipDef.nome.toUpperCase());
     UI.setText('h-range', `Alcance de salto: ${fmtNum(jumpRange(), 1)} al`);
+    if (S.eco) UI.setText('h-res', `◆ ${fmtNum(S.eco.cr, 0)} CR · ⬢ ${S.eco.metal} · ✦ ${S.eco.cristal}`);
     if (ti) {
       UI.setText('h-tname', ti.name);
       UI.setText('h-ttype', ti.type);
@@ -2136,8 +2319,10 @@ function updateMission(dt) {
     const nova = getSystem(galaxy, galaxy.novaTerra).planets.find((p) => p.special === 'nova');
     const prev = mission && mission.idx;
     mission = missionStatus({ S, galaxy, fleet, shipGal: shipGal(), novaPlanetId: nova && nova.id });
+    const tc = S.eco && S.eco.contracts.active.find((c) => c.id === S.eco.contracts.track);
+    if (tc) mission = contractMission(tc, S, galaxy);
     UI.mission(mission);
-    if (prev != null && mission.idx > prev) { audio.discovery(); UI.msg(`✓ Objetivo concluído`, 'good', 'MISSÃO', 4000); }
+    if (prev != null && prev >= 0 && mission.idx > prev) { audio.discovery(); UI.msg(`✓ Objetivo concluído`, 'good', 'MISSÃO', 4000); }
   }
   const wp = mission.wp;
   let world = null, label = '', dist = '';
@@ -2335,7 +2520,7 @@ function save() {
   if (!S.ship) return;
   const data = {
     ship: S.shipDef.id, anchor: S.anchor, local: S.local, quat: S.quat.toArray(),
-    visited: [...S.visited], scanned: S.scanned, stats: S.stats, won: S.won, t: S.t, flags: S.flags,
+    visited: [...S.visited], scanned: S.scanned, stats: S.stats, won: S.won, t: S.t, flags: S.flags, eco: S.eco,
     frame: S.frame ? { id: S.frame.id, rot: S.frame.rot, rel: S.frame.rel } : null, landed: S.landed,
   };
   if (S.mode === 'foot' && S.landed) data.frame.rel = S.landed.rel;
@@ -2345,7 +2530,8 @@ function save() {
 function loadGame() {
   const d = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
   if (!d) return false;
-  S.shipDef = SHIPS.find((s) => s.id === d.ship) || SHIPS[0];
+  S.eco = fixEconomy(d.eco, d.ship || 'andorinha');
+  S.shipDef = shipWithUpgrades(shipById(d.ship), S.eco);
   S.anchor = d.anchor; S.local = d.local; S.quat.fromArray(d.quat); S.cam.quat.copy(S.quat);
   S.visited = new Set(d.visited); S.scanned = d.scanned || {}; S.stats = d.stats; S.won = d.won; S.t = d.t; S.flags = d.flags || {};
   S.savedFrame = d.frame || null; S.savedLanded = d.landed || null;
@@ -2388,8 +2574,11 @@ async function startGame(def, fromSave = false) {
   $('select').classList.add('hidden');
   $('title').classList.add('hidden');
   if (S.ship) scene.remove(S.ship.group);
-  S.shipDef = def;
-  S.ship = buildShip(def);
+  const base = shipById(def.id);
+  if (!fromSave) S.eco = newEconomy(base.id);
+  S.eco = fixEconomy(S.eco, base.id);
+  S.shipDef = shipWithUpgrades(base, S.eco);
+  S.ship = buildShip(S.shipDef);
   S.ship.group.traverse((o) => o.layers.set(SHIP_LAYER));
   scene.add(S.ship.group);
   if (!fromSave) {
@@ -2613,6 +2802,7 @@ function onKeyDown(e) {
     return;
   }
   if (st === 'pause') { if (e.code === 'Escape') pause(false); return; }
+  if (st === 'workshop') { if (e.code === 'Escape') closeWorkshop(); if (e.code === 'KeyK') toggleContracts(); return; }
   if (st === 'title') { if (e.code === 'Escape') { if (!$('pause').classList.contains('hidden')) titleOptions(false); closePanels(); } return; }
   if (st === 'map') {
     if (e.code === 'KeyM' || e.code === 'Escape') closeMap();
@@ -2636,6 +2826,7 @@ function onKeyDown(e) {
       break;
     case 'KeyJ': requestJump(); break;
     case 'KeyB': placeBeacon(); break;
+    case 'KeyK': toggleContracts(); break;
     case 'KeyF': requestScan(); break;
     case 'KeyG':
       if (S.mode === 'foot' || S.landed) break;
@@ -2704,7 +2895,7 @@ function loop(now) {
   cine.uniforms.uFlash.value *= Math.exp(-dt * 2.5);
   const st = S.state;
 
-  if (st === 'select') {
+  if (st === 'select' || st === 'workshop') {
     preview.ang += dt * 0.25;
     const r = 2.1;
     preview.cam.position.set(Math.sin(preview.ang) * r, 0.45 + Math.sin(elapsed * 0.3) * 0.08, Math.cos(preview.ang) * r);
@@ -2764,6 +2955,7 @@ function loop(now) {
         storyTick({ S, galaxy, fleet, say: (sp, txt, o) => { UI.say(sp, txt, o); audio.message(); }, inSystem: (i) => !!S.view && S.sysIndex === i }, 0.5);
         epilogueTick();
         novaMissionTick();
+        contractsTick();
       }
     }
     if (S.mode === 'foot' && S.walker && S.surf) footCamera();

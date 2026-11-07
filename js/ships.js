@@ -26,6 +26,24 @@ export const SHIPS = [
   },
 ];
 
+// Naves que só se compram na oficina (Patch 4)
+export const EXTRA_SHIPS = [
+  {
+    id: 'gaviao', nome: 'Gavião', classe: 'Interceptador · Classe II', reg: 'GV-12',
+    desc: 'Asas para trás, dois motores grandes e quase nada de carga. A nave mais ágil da frota — feita para escoltar e para fugir.',
+    jump: 25, maxC: 3000, turn: 2.2, charge: 6, exhaust: '#ff5a3c', stats: { velocidade: 3, salto: 2, manobra: 5, autonomia: 2 },
+  },
+  {
+    id: 'jabuti', nome: 'Jabuti', classe: 'Cargueiro de mineração · Classe II', reg: 'JB-30',
+    desc: 'Casco blindado, braço de perfuração e porões enormes. Lento, mas extrai o dobro de minério e aguenta pancada.',
+    jump: 30, maxC: 1500, turn: 0.85, charge: 7, exhaust: '#ffc23a', drill: 2, armor: 0.6, stats: { velocidade: 2, salto: 2, manobra: 2, autonomia: 4 },
+  },
+];
+export const ALL_SHIPS = () => [...SHIPS, ...EXTRA_SHIPS];
+export const shipById = (id) => ALL_SHIPS().find((s) => s.id === id) || SHIPS[0];
+// cor escolhida na oficina (ou a original do modelo)
+const pc = (def, k, d) => (def.paint && def.paint[k]) || d;
+
 // ---------------------------------------------------------------------------------------------
 // Texturas de casco geradas em canvas (cor, rugosidade, relevo e luzes)
 // ---------------------------------------------------------------------------------------------
@@ -330,8 +348,8 @@ function newShip() {
 function buildAndorinha(def) {
   const s = newShip();
   const rng = mulberry32(101);
-  const hull = hullMaterial('#c9ccd1', '#d26a2a', 11, 0, 0.45, 1, def.reg);
-  const hullD = hullMaterial('#3a3d42', '#d26a2a', 12, 0, 0.5, 2);
+  const hull = hullMaterial(pc(def, 'base', '#c9ccd1'), pc(def, 'accent', '#d26a2a'), 11, 0, 0.45, 1, def.reg);
+  const hullD = hullMaterial('#3a3d42', pc(def, 'accent', '#d26a2a'), 12, 0, 0.5, 2);
   const prof = [[0, -6.5], [1.2, -6.5], [1.5, -5.6], [1.75, -3], [1.8, 0], [1.7, 2.5], [1.45, 4.5], [1.0, 6.0], [0.5, 6.9], [0, 7.2]];
   s.add(lathe(prof, 40, hull));
   // ventre com placas térmicas escuras
@@ -390,8 +408,8 @@ function buildAndorinha(def) {
 function buildOdisseia(def) {
   const s = newShip();
   const rng = mulberry32(202);
-  const hull = hullMaterial('#b8bec6', '#2a6ad0', 22, 18, 0.55, 2, def.reg);
-  const hull2 = hullMaterial('#5a626c', '#c0c4ca', 23, 0, 0.7, 2);
+  const hull = hullMaterial(pc(def, 'base', '#b8bec6'), pc(def, 'accent', '#2a6ad0'), 22, 18, 0.55, 2, def.reg);
+  const hull2 = hullMaterial('#5a626c', pc(def, 'accent', '#c0c4ca'), 23, 0, 0.7, 2);
   const frame = greyMat();
   const prof = [[0, -25], [4, -25], [4.6, -22], [5.0, -10], [4.8, 5], [4.0, 15], [2.8, 22], [1.4, 26], [0, 28]];
   s.add(lathe(prof, 48, hull));
@@ -461,8 +479,8 @@ function buildOdisseia(def) {
 function buildLeviata(def) {
   const s = newShip();
   const rng = mulberry32(303);
-  const hull = hullMaterial('#7d838c', '#b33a2a', 33, 60, 0.6, 4, def.reg);
-  const hull2 = hullMaterial('#4a4f57', '#d0d0d0', 34, 25, 0.7, 4);
+  const hull = hullMaterial(pc(def, 'base', '#7d838c'), pc(def, 'accent', '#b33a2a'), 33, 60, 0.6, 4, def.reg);
+  const hull2 = hullMaterial('#4a4f57', pc(def, 'accent', '#d0d0d0'), 34, 25, 0.7, 4);
   const frame = greyMat();
   const prof = [[0, -150], [28, -150], [34, -130], [36, -40], [34, 40], [26, 100], [14, 150], [0, 170]];
   const main = lathe(prof, 6, hull);
@@ -544,8 +562,8 @@ function buildLeviata(def) {
 function buildExodo(def) {
   const s = newShip();
   const rng = mulberry32(404);
-  const hull = hullMaterial('#d5d8dc', '#2a8ad0', 44, 90, 0.5, 6, def.reg);
-  const hull2 = hullMaterial('#60666e', '#e0e0e0', 45, 30, 0.7, 6);
+  const hull = hullMaterial(pc(def, 'base', '#d5d8dc'), pc(def, 'accent', '#2a8ad0'), 44, 90, 0.5, 6, def.reg);
+  const hull2 = hullMaterial('#60666e', pc(def, 'accent', '#e0e0e0'), 45, 30, 0.7, 6);
   const ringMat = hullMaterial('#c8ccd2', '#3aa0e0', 46, 220, 0.45, 1, 'ÊXODO');
   const frame = greyMat();
   // espinha principal
@@ -752,7 +770,63 @@ function buildEsperanca(def) {
   return { group: s, cockpit: new THREE.Vector3(0, 124, 505), length: 1330 };
 }
 
-const BUILDERS = { andorinha: buildAndorinha, odisseia: buildOdisseia, leviata: buildLeviata, exodo: buildExodo, esperanca: buildEsperanca };
+// Gavião: interceptador de 19 m, asas enflechadas, dois motores grandes e duas derivas
+function buildGaviao(def) {
+  const s = newShip();
+  const rng = mulberry32(606);
+  const hull = hullMaterial(pc(def, 'base', '#3c4048'), pc(def, 'accent', '#e04a2a'), 61, 0, 0.6, 1, def.reg);
+  const hullD = hullMaterial('#22252a', pc(def, 'accent', '#e04a2a'), 62, 0, 0.6, 2);
+  const frame = greyMat(), nm = darkMat();
+  const prof = [[0, -7.5], [0.9, -7.5], [1.25, -6], [1.35, -2], [1.25, 2], [0.95, 5.5], [0.5, 8.6], [0.12, 10.4], [0, 10.6]];
+  s.add(lathe(prof, 36, hull));
+  const can = new THREE.Mesh(new THREE.SphereGeometry(1, 28, 14, 0, Math.PI * 2, 0, Math.PI / 2), glassMat());
+  can.scale.set(0.62, 0.55, 2.2); at(can, 0, 0.95, 4.6); s.add(can);
+  s.add(wingPair([[1.1, 2.8], [6.4, -4.6], [6.6, -5.8], [5.6, -6.1], [1.1, -3.6]], 0.2, hull, -0.15));
+  s.add(wingPair([[1.0, 6.2], [2.2, 4.4], [2.2, 3.9], [1.0, 4.2]], 0.12, hullD, 0.05)); // canards
+  for (const sx of [-1, 1]) {
+    const fin = new THREE.Mesh(wingGeo([[0, -3.8], [2.6, -6.4], [2.6, -7.2], [0, -7.0]], 0.14), hullD);
+    fin.geometry.rotateZ(Math.PI / 2 - sx * 0.35);
+    at(fin, sx * 0.9, 0.9, 0); s.add(fin);
+    const nac = cyl(0.62, 0.7, 6.5, hull, 20); at(nac, sx * 1.55, -0.2, -4.4); s.add(nac);
+    engine(s, sx * 1.55, -0.2, -7.7, 0.58, def.exhaust, nm);
+    s.add(at(box(0.25, 0.25, 1.6, frame), sx * 6.5, -0.15, -4.6)); // pontas das asas (futuros canhões)
+    navLight(s, sx * 6.6, -0.15, -5.3, sx > 0 ? '#ff2020' : '#20ff40', 0.11, 0);
+    rcs(s, sx * 1.25, 0.4, 7.2, 0.22, frame, nm);
+  }
+  antenna(s, 0, 1.2, -1.5, 1.1, 0.025, frame, 1.3);
+  navLight(s, 0, -1.2, 0, '#ff3030', 0.08, 1.4, 0.5);
+  greebles(s, greyMat(), rng, 40, onLathe(prof, -6.5, 6, 1, 1, -0.5, Math.PI + 0.5), [0.06, 0.25]);
+  return { group: s, cockpit: new THREE.Vector3(0, 1.15, 5.2), length: 18.5 };
+}
+// Jabuti: cargueiro minerador de 31 m, casco largo e blindado, porões laterais e braço de perfuração
+function buildJabuti(def) {
+  const s = newShip();
+  const rng = mulberry32(707);
+  const hull = hullMaterial(pc(def, 'base', '#b0a27a'), pc(def, 'accent', '#2e2e2e'), 71, 4, 0.55, 2, def.reg);
+  const hullD = hullMaterial('#4a4740', pc(def, 'accent', '#d0a040'), 72, 0, 0.6, 2);
+  const frame = greyMat(), nm = darkMat();
+  const body = box(6.2, 3.6, 22, hull); at(body, 0, 0, 0); s.add(body);
+  const top = box(4.6, 1.2, 15, hullD); at(top, 0, 2.3, -1.5); s.add(top);
+  const nose = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 3.1, 4, 6, 1).rotateX(Math.PI / 2), hull); at(nose, 0, 0, 13); s.add(nose);
+  const bridge = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2), glassMat());
+  bridge.scale.set(1.4, 0.8, 1.8); at(bridge, 0, 2.9, 6.8); s.add(bridge);
+  for (const sx of [-1, 1]) {
+    for (let k = 0; k < 3; k++) { const pod = cyl(1.25, 1.25, 5, hullD, 16); at(pod, sx * 4.1, -0.6, 5 - k * 6); s.add(pod); s.add(at(box(0.9, 0.3, 0.6, frame), sx * 3.4, -0.6, 5 - k * 6)); }
+    engine(s, sx * 1.9, 0.9, -11.2, 0.75, def.exhaust, nm);
+    engine(s, sx * 1.9, -1.0, -11.2, 0.75, def.exhaust, nm);
+    rcs(s, sx * 3.15, 1.2, 9, 0.3, frame, nm); rcs(s, sx * 3.15, 1.2, -9, 0.3, frame, nm);
+    navLight(s, sx * 5.4, -0.6, -8, sx > 0 ? '#ff2020' : '#20ff40', 0.14, 0);
+  }
+  // braço de perfuração sob o nariz
+  const arm = cyl(0.25, 0.25, 4, frame, 8); arm.rotation.x = 0.5; at(arm, 0, -2.4, 11.5); s.add(arm);
+  const bit = new THREE.Mesh(new THREE.ConeGeometry(0.7, 2.2, 10).rotateX(Math.PI / 2 + 0.5), darkMat()); at(bit, 0, -3.4, 13.4); s.add(bit);
+  antenna(s, 1.5, 3, -6, 2.2, 0.04, frame, 0.8); antenna(s, -1.5, 3, -7, 1.6, 0.04, frame, 1.1, 0.3);
+  navLight(s, 0, 3.6, -9, '#ffffff', 0.12, 1.2);
+  greebles(s, greyMat(), rng, 60, (r) => { const x = (r() - 0.5) * 5.8, z = (r() - 0.5) * 20; return { p: new THREE.Vector3(x, 1.82, z), n: new THREE.Vector3(0, 1, 0) }; }, [0.15, 0.6]);
+  return { group: s, cockpit: new THREE.Vector3(0, 3.1, 7.5), length: 31 };
+}
+
+const BUILDERS = { andorinha: buildAndorinha, odisseia: buildOdisseia, leviata: buildLeviata, exodo: buildExodo, esperanca: buildEsperanca, gaviao: buildGaviao, jabuti: buildJabuti };
 
 // ---------------------------------------------------------------------------------------------
 // Colisão: o casco vira um conjunto de caixas (e anéis, para os toros grandes) no espaço local

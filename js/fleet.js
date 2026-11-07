@@ -172,6 +172,25 @@ export class FleetView {
     this.objs.push({ id, def, state, model, group, glow, anchor, off, pos: [0, 0, 0], world: new THREE.Vector3(), name: def.nome, radius: model.length, spin: Math.random() * 6, shape: model.shape, unit: model.unit, gap: Infinity, layer1: false });
   }
 
+  // objeto de contrato (contêiner ou cápsula de fuga), parado perto de um planeta
+  addProp(id, group, anchor, name, kind, color, k = 0) {
+    this.scene.add(group);
+    const glow = glowSprite(color, 0.03);
+    glow.renderOrder = 5;
+    this.scene.add(glow);
+    const R = anchor ? anchor.radius : 0;
+    const off = new THREE.Vector3(Math.cos(k * 1.9 + 2.2), 0.2 * Math.sin(k * 1.3), Math.sin(k * 1.9 + 2.2));
+    off.setLength(anchor ? R * 3 + 300 + k * 90 : 0.3 * KM_PER_AU);
+    this.objs.push({ id, prop: kind, group, glow, anchor, off, pos: [0, 0, 0], world: new THREE.Vector3(), name, radius: 0.006, spin: Math.random() * 6 });
+  }
+  remove(id) {
+    const k = this.objs.findIndex((o) => o.id === id);
+    if (k < 0) return;
+    const o = this.objs[k];
+    this.scene.remove(o.group); if (o.glow) this.scene.remove(o.glow);
+    this.objs.splice(k, 1);
+  }
+
   addShadow(planet, k) {
     const group = makeShadowModel();
     this.scene.add(group);
@@ -200,6 +219,11 @@ export class FleetView {
       o.pos = [ap[0] + o.off.x, ap[1] + o.off.y, ap[2] + o.off.z];
       o.world.set(o.pos[0] - shipLocal[0], o.pos[1] - shipLocal[1], o.pos[2] - shipLocal[2]);
       o.group.position.copy(o.world);
+      if (o.prop) {
+        o.spin += dt * 0.15;
+        o.group.rotation.set(o.spin * 0.3, o.spin, 0.2);
+        if (o.group.userData.lamp) o.group.userData.lamp.visible = (elapsed % 1.4) < 0.4;
+      }
       if (o.model) {
         if (o.state === 'destroco') { o.spin += dt * 0.05; o.group.rotation.set(o.spin * 0.7, o.spin, 0.4); }
         else o.model.update(elapsed, o.state === 'socorro' ? 0 : 0.15, 0);

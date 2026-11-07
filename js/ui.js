@@ -4,6 +4,7 @@ import { TYPE_NAME } from './system.js';
 import { fmtDist, fmtNum, fmtTime, R_EARTH, KM_PER_LY, C_KMS } from './util.js';
 import { SPEAKER_COLOR } from './fleet.js';
 import { SPECIES } from './novaterra.js';
+import { UPGRADES, UPG_COST, SHIP_COST, PAINTS, PAINT_COST, canPay, costTxt, shipCatalog } from './economy.js';
 
 // Falas em fila, legendadas no centro da tela (estilo cinema); avisos curtos viram um "toast"
 const TOAST_FROM = new Set(['NAV', 'ÁUDIO', 'MISSÃO']);
@@ -108,7 +109,7 @@ export const UI = {
     if (box._k === key) return;
     const changed = box._idx !== m.idx;
     box._k = key; box._idx = m.idx;
-    $('m-step').textContent = m.free ? '· LIVRE' : `${m.idx + 1}/${m.total}`;
+    $('m-step').textContent = m.contract ? '· CONTRATO' : m.free ? '· LIVRE' : `${m.idx + 1}/${m.total}`;
     $('m-title').textContent = m.title;
     $('m-text').textContent = m.text;
     $('m-keys').innerHTML = keys;
@@ -238,6 +239,59 @@ export const UI = {
       <p class="note">Missão: encontrar um mundo com habitabilidade acima de 90%. A sonda Vigia-7 apontou uma região — veja no mapa [M].</p>
       <button class="btn" data-close="logPanel">Fechar [L]</button>`;
     p.classList.remove('hidden');
+  },
+
+  // ------------------------------------------------------------ oficina (sistemas, pintura, hangar)
+  // act(acao, arg) é chamado pelos botões; here = 'esperanca' | 'colonia'
+  shop(S, tab, here, act) {
+    const p = $('shop'), e = S.eco, def = S.shipDef;
+    const res = `<div class="res"><span>◆ <b>${fmtNum(e.cr, 0)}</b> CR</span><span>⬢ <b>${e.metal}</b> metal</span><span>✦ <b>${e.cristal}</b> cristal</span></div>`;
+    const tabs = [['sys', 'SISTEMAS'], ['paint', 'PINTURA'], ['hangar', 'HANGAR']].map(([k, t]) => `<button class="tab ${tab === k ? 'on' : ''}" data-a="tab" data-v="${k}">${t}</button>`).join('');
+    let body = '';
+    if (tab === 'sys') {
+      body = UPGRADES.map((u) => {
+        const n = e.upg[u.id], c = UPG_COST[n];
+        const pips = [1, 2, 3].map((k) => `<i class="${k <= n ? 'on' : ''}"></i>`).join('');
+        return `<div class="item"><div><b>${esc(u.nome)}</b> <span class="pips">${pips}</span><br><small>${esc(u.desc(Math.max(n, 1)))}${n ? '' : ' (nível 1)'}</small></div>
+          ${c ? `<button class="btn small ${canPay(e, c) ? 'primary' : 'off'}" data-a="upg" data-v="${u.id}">Nível ${n + 1} · ${esc(costTxt(c))}</button>` : '<span class="muted">MÁXIMO</span>'}</div>`;
+      }).join('') + `<p class="note">As melhorias são dos sistemas de bordo: valem para qualquer nave do hangar.</p>`;
+    } else if (tab === 'paint') {
+      const cur = def.paint || {};
+      const sw = (k) => PAINTS.map((c) => `<button class="sw ${cur[k] === c ? 'on' : ''}" style="background:${c}" data-a="${k}" data-v="${c}"></button>`).join('');
+      body = `<h3>CASCO</h3><div class="sws">${sw('base')}</div><h3>DETALHES</h3><div class="sws">${sw('accent')}</div>
+        <h3>NOME NO CASCO</h3><div class="row"><input id="shop-name" maxlength="14" value="${esc(def.reg)}" /><button class="btn small" data-a="name">Pintar nome</button></div>
+        <p class="note">Cada mudança custa ${PAINT_COST} CR (tinta e horas de trabalho da tripulação da Esperança).</p>`;
+    } else {
+      body = shipCatalog().map((s) => {
+        const own = e.owned.includes(s.id), cur = def.id === s.id, c = SHIP_COST[s.id];
+        const btn = cur ? '<span class="muted">EM USO</span>'
+          : own ? (here === 'esperanca' ? `<button class="btn small primary" data-a="use" data-v="${s.id}">Usar esta</button>` : '<span class="muted">NO HANGAR DA ESPERANÇA</span>')
+          : `<button class="btn small ${canPay(e, c) ? 'primary' : 'off'}" data-a="buy" data-v="${s.id}">Comprar · ${esc(costTxt(c))}</button>`;
+        return `<div class="item"><div><b>${esc(s.nome)}</b> <small class="muted">${esc(s.classe)}</small><br><small>Salto ${s.jump} al · ${fmtNum(s.maxC, 0)} c · manobra ${s.stats.manobra}/5${s.drill ? ' · perfuração ×' + s.drill : ''}${s.armor ? ' · blindada' : ''}</small></div>${btn}</div>`;
+      }).join('') + (here === 'esperanca' ? '' : '<p class="note">Comprar e trocar de nave só no hangar da Esperança.</p>');
+    }
+    p.innerHTML = `<h2>${here === 'esperanca' ? 'OFICINA · ESPERANÇA' : 'OFICINA DA COLÔNIA'}</h2>${res}<div class="tabs">${tabs}</div><div class="body">${body}</div>
+      <div class="menu"><button class="btn" data-a="contracts">Contratos [K]</button><button class="btn big" data-a="close">Desatracar [Esc]</button></div>`;
+    p.classList.remove('hidden');
+    p.querySelectorAll('[data-a]').forEach((b) => (b.onclick = () => act(b.dataset.a, b.dataset.v)));
+  },
+
+  // ------------------------------------------------------------ contratos da frota
+  contracts(S, offers, act) {
+    const p = $('ctPanel'), C = S.eco.contracts;
+    const rw = (r) => [r.cr ? `${fmtNum(r.cr, 0)} CR` : '', r.metal ? `${r.metal} metal` : '', r.cristal ? `${r.cristal} cristal` : ''].filter(Boolean).join(' + ');
+    const row = (c, active) => `<div class="item"><div><b>${esc(c.title)}</b> <small class="muted">${fmtNum(c.dist, 1)} al</small><br><small>${esc(c.text)}</small><br><small class="good">Recompensa: ${esc(rw(c.reward))}</small></div>
+      <div class="col">${active ? `<button class="btn small ${C.track === c.id ? 'primary' : ''}" data-a="track" data-v="${c.id}">${C.track === c.id ? 'Rastreando' : 'Rastrear'}</button><button class="btn small" data-a="drop" data-v="${c.id}">Abandonar</button>`
+        : `<button class="btn small ${C.active.length < 3 ? 'primary' : 'off'}" data-a="take" data-v="${c.id}">Aceitar</button>`}</div></div>`;
+    p.innerHTML = `<h2>CONTRATOS DA FROTA</h2>
+      <p class="note">A frota paga por trabalho: mapear sistemas, trazer amostras, recuperar carga, resgatar quem ficou para trás. Até 3 contratos ao mesmo tempo. O pagamento chega pelo rádio assim que o trabalho termina.</p>
+      <h3>EM ANDAMENTO (${C.active.length}/3)</h3>${C.active.length ? C.active.map((c) => row(c, true)).join('') : '<p class="note">Nenhum.</p>'}
+      ${C.track ? '<p class="note">O contrato rastreado aparece no lugar do objetivo da história. Clique em "Rastreando" para voltar à história.</p>' : ''}
+      <h3>DISPONÍVEIS</h3>${offers.length ? offers.map((c) => row(c, false)).join('') : '<p class="note">Nenhuma oferta agora. Novas chegam a cada poucos minutos.</p>'}
+      <p class="note">Concluídos: ${S.eco.done}</p>
+      <button class="btn" data-close="ctPanel">Fechar [K]</button>`;
+    p.classList.remove('hidden');
+    p.querySelectorAll('[data-a]').forEach((b) => (b.onclick = () => act(b.dataset.a, +b.dataset.v)));
   },
 
   // ------------------------------------------------------------ info de estrela no mapa
